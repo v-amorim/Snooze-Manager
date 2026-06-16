@@ -899,14 +899,6 @@ export async function init(ctx) {
     Utils.Debug.setEnabled(dbg);
   } catch(e) {}
 
-  // Globally expose the Ember API for DevTools debugging
-  ctx.rcp.postInit('rcp-fe-ember-libs', async (rcp) => {
-    window.__SM_EMBER_API = rcp;
-    try {
-      window.__SM_EMBER_INSTANCE = await rcp.getEmber();
-      Utils.Debug.log('[Snooze-Manager] Globally exposed window.__SM_EMBER_INSTANCE for DevTools.');
-    } catch(e) {}
-  });
 
   // Register the global SnoozeManager early so modules can hook into it
   window.SnoozeManager = { 

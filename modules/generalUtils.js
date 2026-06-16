@@ -151,11 +151,12 @@ const observer = createSmartObserver();
  * Ember Hook
  */
 
-const EmberHook = {
+const EmberHook = window.__SM_EmberHook || (window.__SM_EmberHook = {
   _rules: [],
   _installed: false,
   _wrappedMark: Symbol('SnoozeEmberWrapped'),
   _appliedRulesKey: '__snoozeAppliedRules',
+  _retroKey: '__sm_retro_applied',
 
   install(context) {
     if (this._installed) {
@@ -164,6 +165,7 @@ const EmberHook = {
     }
     this._installed = true;
 
+    // Try sync Ember first (eager modules), fall back to async Promise (lazy modules).
     context.rcp.postInit('rcp-fe-ember-libs', (api) => {
       const emberLibs = api;
       if (!emberLibs || typeof emberLibs.getEmber !== 'function') {
@@ -171,27 +173,61 @@ const EmberHook = {
         return;
       }
 
-      const target = emberLibs;
-      if (target[this._wrappedMark]) {
-        return;
-      }
-
-      const originalGetEmber = emberLibs.getEmber.bind(emberLibs);
-      emberLibs.getEmber = function(...args) {
-        const p = originalGetEmber(...args);
-        return Promise.resolve(p).then(Ember => {
+      const hookEmber = (Ember) => {
+        if (!Ember || !Ember.Component) return;
+        if (!emberLibs[this._wrappedMark]) {
           try {
             this._hookComponentExtend(Ember);
             this._hookServiceExtend(Ember);
+            Debug.log('[EmberHook] hooks installed');
           } catch (e) {
-            Debug.warn('[EmberHook] hookComponentExtend error:', e);
+            Debug.warn('[EmberHook] hook error:', e);
           }
-          return Ember;
-        });
-      }.bind(this);
+          emberLibs[this._wrappedMark] = true;
+        }
+      };
 
-      target[this._wrappedMark] = true;
+      // Sync path. catches eagerly-loaded component extends
+      const Ember = this._findEmberSync(emberLibs);
+      if (Ember) {
+        hookEmber(Ember);
+      }
+
+      // Async fallback. catches lazily-loaded components
+      Promise.resolve(emberLibs.getEmber()).then(Ember => hookEmber(Ember));
     }, true);
+  },
+
+  _findEmberSync(emberLibs) {
+    if (window.Ember && typeof window.Ember.Component?.extend === 'function' &&
+        typeof window.Ember.Service?.extend === 'function') {
+      return window.Ember;
+    }
+
+    for (const key of Object.getOwnPropertyNames(emberLibs)) {
+      const val = emberLibs[key];
+      if (val && val !== emberLibs.getEmber &&
+          typeof val.Component?.extend === 'function' &&
+          typeof val.Service?.extend === 'function') {
+        return val;
+      }
+    }
+
+    try {
+      const wpr = window.__webpack_require__;
+      if (wpr?.c) {
+        for (const id in wpr.c) {
+          const mod = wpr.c[id];
+          if (mod.exports &&
+              typeof mod.exports.Component?.extend === 'function' &&
+              typeof mod.exports.Service?.extend === 'function') {
+            return mod.exports;
+          }
+        }
+      }
+    } catch (e) {}
+
+    return null;
   },
 
   _wrapMethod(target, name, replacement) {
@@ -231,7 +267,12 @@ const EmberHook = {
 
     if (rule.mixin) {
       try {
-        const mixinObj = rule.mixin(Ember, extendArgs);
+        let mixinObj = rule.mixin(Ember, extendArgs);
+        // Runtime componentName filter: wrap init so only matching instances
+        // (by _debugContainerKey) execute the hook code.
+        if (rule.componentName && mixinObj && mixinObj.init) {
+          mixinObj.init = this._wrapInitWithNameCheck(mixinObj.init, rule.componentName);
+        }
         cur = cur.extend(mixinObj);
       } catch (e) {
         Debug.warn('[EmberHook] mixin failed:', rule.name, e);
@@ -281,11 +322,7 @@ const EmberHook = {
           let matched = false;
 
           if (typeof m === 'function') {
-            try {
-              matched = m(args);
-            } catch (e) {
-              matched = false;
-            }
+            try { matched = m(args); } catch(e) { matched = false; }
           } else if (m === '*') {
             matched = true;
           } else {
@@ -297,12 +334,33 @@ const EmberHook = {
             klass = this._applyRuleToClass(Ember, klass, args, rule);
           }
         }
+        if (klass) klass[this._retroKey] = true;
       }
 
       return klass;
     }.bind(this);
 
     target[this._wrappedMark] = true;
+  },
+
+  // Wraps init with runtime _debugContainerKey check; non-matching instances fall through to _super.
+  _wrapInitWithNameCheck(initFn, componentName) {
+    return function(...args) {
+      const debugKey = this._debugContainerKey;
+      let matchName = null;
+      if (debugKey) {
+        const afterColon = debugKey.split(':')[1];
+        if (afterColon) matchName = afterColon.split('@')[0];
+      }
+      if (matchName && matchName !== componentName) {
+        // Non-matching: just call _super (source init) without the hook code
+        if (typeof this._super === 'function') {
+          return this._super(...args);
+        }
+        return;
+      }
+      return initFn.apply(this, args);
+    };
   },
 
   _hookServiceExtend(Ember) {
@@ -323,7 +381,7 @@ const EmberHook = {
           let matched = false;
 
           if (typeof m === 'function') {
-            try { matched = m(args); } catch (e) { matched = false; }
+            try { matched = m(args); } catch(e) { matched = false; }
           } else if (m === '*') {
             matched = true;
           } else {
@@ -335,6 +393,7 @@ const EmberHook = {
             klass = this._applyRuleToClass(Ember, klass, args, rule);
           }
         }
+        if (klass) klass[this._retroKey] = true;
       }
 
       return klass;
@@ -355,8 +414,7 @@ const EmberHook = {
   getRulesCount() {
     return this._rules.length;
   },
-};
-window.SnoozeEmberHook = EmberHook;
+});
 
 
 // Serialize a request body for LCU HTTP methods.
@@ -554,7 +612,7 @@ function settingsUtils(context, pluginConfig) {
     window.__SM_EMBER = rcp;
     const em = await rcp.getEmber();
 
-    // Router patch — install once, route map reads from shared registry
+    // Router patch.  install once, route map reads from shared registry
     if (!em.Router.__snoozePatched) {
       em.Router.__snoozePatched = true;
       const nativeExtend = em.Router.extend;
@@ -567,7 +625,7 @@ function settingsUtils(context, pluginConfig) {
       };
     }
 
-    // App factory patch — install once, template build reads from shared registry
+    // App factory patch. install once, template build reads from shared registry
     const appFactory = await rcp.getEmberApplicationFactory();
     if (!appFactory.__snoozePatched) {
       appFactory.__snoozePatched = true;

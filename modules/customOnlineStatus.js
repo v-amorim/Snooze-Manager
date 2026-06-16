@@ -26,6 +26,7 @@ async function syncAvailability() {
 // Install WS + XHR hooks so the status stays locked even when the client resets it.
 // Called once from init(). safe to call multiple times (hooks are registered once).
 let _hooksInstalled = false;
+let _emberHookInstalled = false;
 function installHooks(context) {
     if (_hooksInstalled) return;
     _hooksInstalled = true;
@@ -62,6 +63,43 @@ function installHooks(context) {
         if (parsed.availability !== undefined) parsed.availability = desired;
         if (parsed.statusMessage !== undefined) parsed.statusMessage = desiredMsg;
         return JSON.stringify(parsed);
+    });
+}
+
+function installEmberHook() {
+    if (_emberHookInstalled) return;
+    _emberHookInstalled = true;
+
+    Utils.Hooks.Ember.registerRule({
+        name: 'custom-online-status-identity',
+        matcher: 'lol-social-identity',
+        mixin() {
+            return {
+                didInsertElement() {
+                    this._super(...arguments);
+                    const hitbox = this.element.querySelector('.lol-social-availability-hitbox');
+                    if (hitbox && !hitbox.hasAttribute('data-pm-status-menu-hook')) {
+                        hitbox.setAttribute('data-pm-status-menu-hook', 'true');
+                        hitbox.addEventListener('click', (e) => {
+                            const currentEnabled = Utils.Store.get('customOnlineStatus', 'enabled');
+                            if (!currentEnabled) return;
+                            e.stopPropagation(); e.stopImmediatePropagation();
+                            const customMenu = getStatusMenu();
+                            const r = hitbox.getBoundingClientRect();
+                            customMenu.style.left = 'auto';
+                            customMenu.style.right = (window.innerWidth - r.right) + 'px';
+                            customMenu.style.top = (r.bottom + 5) + 'px';
+                            customMenu.style.display = 'block';
+                            if (Utils.LCU) {
+                                Utils.LCU.get('/lol-chat/v1/me').then(me => {
+                                    if (me && statusMsgInput) statusMsgInput.value = me.statusMessage || '';
+                                }).catch(() => {});
+                            }
+                        }, true);
+                    }
+                },
+            };
+        },
     });
 }
 
@@ -278,27 +316,7 @@ export function load() {
         });
     }
 
-    Utils.DOM.observer.observe('.social-identity-block .lol-social-availability-hitbox', (hitbox) => {
-        if (hitbox.hasAttribute('data-pm-status-menu-hook')) return;
-        hitbox.setAttribute('data-pm-status-menu-hook', 'true');
-
-        hitbox.addEventListener('click', (e) => {
-            const currentEnabled = Utils.Store.get('customOnlineStatus', 'enabled');
-            if (!currentEnabled) return;
-            e.stopPropagation(); e.stopImmediatePropagation();
-            const customMenu = getStatusMenu();
-            const r = hitbox.getBoundingClientRect();
-            customMenu.style.left = 'auto';
-            customMenu.style.right = (window.innerWidth - r.right) + 'px';
-            customMenu.style.top = (r.bottom + 5) + 'px';
-            customMenu.style.display = 'block';
-            if (Utils.LCU) {
-                Utils.LCU.get('/lol-chat/v1/me').then(me => {
-                    if (me && statusMsgInput) statusMsgInput.value = me.statusMessage || '';
-                }).catch(() => {});
-            }
-        }, true);
-    });
+    installEmberHook();
 
     // Apply saved status to the server on load
     syncAvailability();

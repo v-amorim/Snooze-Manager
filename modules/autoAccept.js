@@ -190,6 +190,7 @@ export function load() {
 
         Utils.LCU.observe('/lol-matchmaking/v1/ready-check', e => {
             if (!e.data || !Utils.Store.get('autoAccept', EXIT_ON_DECLINE_KEY)) return;
+			// playerResponse === "Declined" ? check needed?
             if (e.data.state === 'StrangerDeclined' || e.data.state === 'PartyDeclined') {
                 Utils.Debug.log('[AutoAccept] Queue declined by someone. Exiting queue...');
                 Utils.LCU.delete('/lol-matchmaking/v1/search').catch(() => {});

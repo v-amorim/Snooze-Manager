@@ -38,6 +38,8 @@ const tabData = {
     wards: { loaded: false, items: [], cardMap: new Map(), activeFilter: 'all', fetcher: fetchUnownedWards, subtitle: "Rerollable Wards you don't own yet" },
     emotes: { loaded: false, items: [], cardMap: new Map(), activeFilter: 'all', fetcher: fetchUnownedEmotes, subtitle: "Rerollable Emotes you don't own yet" }
 };
+let sessionUnsub = null;
+let currentChampId = null;
 
 // Styles
 function injectStyles() {
@@ -326,6 +328,28 @@ function refreshAllBadges() {
         }
     });
 }
+
+
+function handleSession(session) {
+    if (!session) return;
+    const localCell = session.localPlayerCellId;
+    const local = (session.myTeam || []).find(p => p.cellId === localCell);
+    if (!local) return;
+    const champId = local.championId || local.championPickIntent || 0;
+    if (champId !== currentChampId) currentChampId = champId;
+}
+
+function mountSessionObserver() {
+    if (sessionUnsub) return;
+    sessionUnsub = Utils.LCU.observe('/lol-champ-select/v1/session', event => handleSession(event?.data));
+    Utils.LCU.get('/lol-champ-select/v1/session').then(handleSession).catch(() => {});
+}
+
+function unmountSessionObserver() {
+    if (sessionUnsub) { sessionUnsub(); sessionUnsub = null; }
+    currentChampId = null;
+}
+
 
 // LOOT WHALE HELPER
 async function getSessionToken() {
@@ -1456,7 +1480,6 @@ export function installEmberHook() {
     if (emberHookRegistered) return;
     emberHookRegistered = true;
 
-    // Whale Helper
     Utils.Hooks.Ember.registerRule({
         name: 'whale-helper-hook',
         matcher: 'loot-mass-disenchant-action-tab',

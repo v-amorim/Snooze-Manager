@@ -339,7 +339,7 @@ function rebuildPartyIndex(friendsArray) {
         comp.add(puuid);
     });
 
-    // Pass 4: Assign stable colors to valid groups
+    // Pass 4: Assign colors to valid groups
     const nextFriendColors = new Map();
 
     components.forEach((members) => {
@@ -638,7 +638,7 @@ function formatFriendLine(activity) {
 
 // roster member DOM
 function getRosterMemberName(member) {
-    return member.querySelector('.member-name')?.textContent?.trim() || '';
+    return member?.dataset?.snoozeFriendName || member.querySelector('.member-name')?.textContent?.trim() || '';
 }
 
 function resolveRosterMember(node) {
@@ -1335,8 +1335,14 @@ export function installEmberHook() {
                     refreshRosterMemberElement(this.element);
                 },
                 */
+                didInsertElement() {
+                    this._super(...arguments);
+                    if (this.element) this.element.dataset.snoozeFriendName = this.get('gameName') || '';
+                    refreshRosterMemberElement(this.element);
+                },
                 didRender() {
                     this._super(...arguments);
+                    if (this.element) this.element.dataset.snoozeFriendName = this.get('gameName') || '';
                     refreshRosterMemberElement(this.element);
                 },
                 willDestroyElement() {
@@ -1425,7 +1431,7 @@ export function load() {
     installEmberHook();
     syncLcuObserver();
 
-    // Passively track the native client height via settings observer
+    // track the native client height via settings observer
     if (Utils.LCU && Utils.LCU.observe) {
         Utils.LCU.observe('/lol-settings/v1/local/video', (event) => {
             if (event?.data?.Height > 0) {

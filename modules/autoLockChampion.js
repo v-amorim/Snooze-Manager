@@ -14,13 +14,18 @@ let lastBanDebugKey = '';
 
 let currentSummonerId = null;
 let currentPuuid = null;
+let emberTimerMs = null;
+let lastSessionData = null;
+let emberTimerCrossed = false;
+let unregisterPanic = null;
+let panicActive = false;
 
 const MAX_PRIORITY_CHAMPS = 3;
 const PICK_PRIORITY_KEY = 'pickIds';
 const BAN_PRIORITY_KEY = 'banIds';
-const DELAY_KEY = 'delay';
-const DELAY_MIN = 0;
-const DELAY_MAX = 10;
+const LOCK_BEFORE_END_KEY = 'lockBeforeEnd';
+const LOCK_BEFORE_END_MIN = 0;
+const LOCK_BEFORE_END_MAX = 60;
 
 function fetchCurrentSummoner() {
     if (currentSummonerId && currentPuuid) return;
@@ -33,12 +38,12 @@ function fetchCurrentSummoner() {
     }).catch(()=>{});
 }
 
-function getDelay() {
-    const v = Utils.Store.get('autoLockChampion', DELAY_KEY);
+function getLockBeforeEndMs() {
+    const v = Utils.Store.get('autoLockChampion', LOCK_BEFORE_END_KEY);
     if (v === undefined || v === null) return 0;
     const n = Number(v);
     if (!isFinite(n)) return 0;
-    return Math.min(DELAY_MAX, Math.max(DELAY_MIN, n));
+    return Math.min(LOCK_BEFORE_END_MAX, Math.max(LOCK_BEFORE_END_MIN, n)) * 1000;
 }
 
 function toggleFeature(enabled) {
@@ -313,21 +318,21 @@ function renderExtraSettings(container) {
         updatePickers();
     });
 
-    // Delay Input Row
-    const delayRow = document.createElement('div');
-    Object.assign(delayRow.style, { display: 'flex', alignItems: 'center', gap: '10px', marginTop: '5px' });
+    // Lock Before End Input Row
+    const lockRow = document.createElement('div');
+    Object.assign(lockRow.style, { display: 'flex', alignItems: 'center', gap: '10px', marginTop: '5px' });
 
-    const delayLabel = document.createElement('span');
-    delayLabel.textContent = 'Action Delay (seconds)';
-    Object.assign(delayLabel.style, { color: '#a09b8c', fontSize: '12px', whiteSpace: 'nowrap' });
+    const lockLabel = document.createElement('span');
+    lockLabel.textContent = 'Lock in X seconds before turn ends (0 = instant)';
+    Object.assign(lockLabel.style, { color: '#a09b8c', fontSize: '12px', whiteSpace: 'nowrap' });
 
-    const delayInput = document.createElement('input');
-    delayInput.type = 'number';
-    delayInput.min = String(DELAY_MIN);
-    delayInput.max = String(DELAY_MAX);
-    delayInput.step = '0.5';
-    delayInput.value = String(getDelay());
-    Object.assign(delayInput.style, {
+    const lockInput = document.createElement('input');
+    lockInput.type = 'number';
+    lockInput.min = String(LOCK_BEFORE_END_MIN);
+    lockInput.max = String(LOCK_BEFORE_END_MAX);
+    lockInput.step = '0.5';
+    lockInput.value = String(getLockBeforeEndMs() / 1000);
+    Object.assign(lockInput.style, {
         background: '#111',
         border: '1px solid #3e2e13',
         color: '#f0e6d2',
@@ -338,19 +343,19 @@ function renderExtraSettings(container) {
         fontSize: '13px'
     });
 
-    delayInput.addEventListener('click', (e) => e.stopPropagation());
-    delayInput.addEventListener('change', () => {
-        let v = parseFloat(delayInput.value);
+    lockInput.addEventListener('click', (e) => e.stopPropagation());
+    lockInput.addEventListener('change', () => {
+        let v = parseFloat(lockInput.value);
         if (!isFinite(v)) v = 0;
-        v = Math.min(DELAY_MAX, Math.max(DELAY_MIN, v));
+        v = Math.min(LOCK_BEFORE_END_MAX, Math.max(LOCK_BEFORE_END_MIN, v));
         v = Math.round(v * 10) / 10;
-        delayInput.value = String(v);
-        Utils.Store.set('autoLockChampion', DELAY_KEY, v);
+        lockInput.value = String(v);
+        Utils.Store.set('autoLockChampion', LOCK_BEFORE_END_KEY, v);
     });
 
-    delayRow.appendChild(delayLabel);
-    delayRow.appendChild(delayInput);
-    container.appendChild(delayRow);
+    lockRow.appendChild(lockLabel);
+    lockRow.appendChild(lockInput);
+    container.appendChild(lockRow);
 
     if (Utils.LCU) {
         Utils.LCU.get('/lol-game-data/assets/v1/champion-summary.json').then(champs => {
@@ -375,16 +380,87 @@ function renderExtraSettings(container) {
     }));
     container.appendChild(banToggleRow);
 
+    // Panic Key Hotkey
     const currentPanicKey = Utils.Store.get('global', 'panicKey') || 'F2';
     container.appendChild(Utils.Settings.createHotkeyRow(
-        'Panic Key (Cancel Auto Actions)', 
-        currentPanicKey, 
+        'Panic Key (Cancel Auto Lock)',
+        currentPanicKey,
         (newKey) => Utils.Store.set('global', 'panicKey', newKey),
-        'Note: The Panic Key only works if you have set an Action Delay greater than 0 seconds. You must press the key during the countdown window to cancel the auto-lock.'
+        'Press the panic key at any point during champion select to cancel auto-lock for the current champion select only. Next champ select will re-enable automatically.'
     ));
+
+}
+
+function completePendingActions() {
+    const s = lastSessionData;
+    if (!isEnabled || !s) return;
+    const allActions = s.actions ? s.actions.flat(2) : [];
+    const myActions = allActions.filter(a => {
+        if (a.actorCellId !== s.localPlayerCellId || a.completed) return false;
+        if (a.type !== 'pick' && a.type !== 'ban') return false;
+        return a.isInProgress;
+    });
+    if (myActions.length === 0) return;
+    const lockBeforeEndMs = getLockBeforeEndMs();
+    if (lockBeforeEndMs <= 0) return;
+    for (const action of myActions) {
+        const champId = chooseChampionForAction(s, action, 'unknown');
+        if (!champId) continue;
+        const shouldComplete = shouldCompleteAction(s, action, true, true, lockBeforeEndMs);
+        if (!shouldComplete) continue;
+        if (action.type === 'ban' && getChampSelectPhase(s) !== 'BAN_PICK') continue;
+        const now = Date.now();
+        const lastPatchTime = lastAutoLockKeys.get(action.id + '_time') || 0;
+        if (now - lastPatchTime < 1500) continue;
+        lastAutoLockKeys.set(action.id + '_time', now);
+        Utils.Debug.log(`[AutoSelect] Ember timer triggered lock for action ${action.id}`);
+        Utils.LCU.patch(`/lol-champ-select/v1/session/actions/${action.id}`, { championId: champId, completed: true }).catch(() => {});
+    }
+}
+
+function installEmberTimerHook() {
+    Utils.Debug.log('[AutoSelect] installing Ember timer hook');
+    Utils.Hooks.Ember.registerRule({
+        name: 'sm-auto-lock-timer',
+        matcher: 'champion-select',
+        mixin() {
+            return {
+                didInsertElement() {
+                    this._super(...arguments);
+                    const t = this.get('session.timer.timeRemainingInMs');
+                    Utils.Debug.log('[AutoSelect] EmberHook didInsertElement: timer=', t, 'session=', this.get('session'));
+                    emberTimerMs = t;
+                    this._smUpdateTimer = () => {
+                        const v = this.get('session.timer.timeRemainingInMs');
+                        emberTimerMs = v;
+                        if (isEnabled && !panicActive) {
+                            const lockMs = getLockBeforeEndMs();
+                            if (lockMs > 0 && v !== null && v !== undefined) {
+                                if (v <= lockMs && !emberTimerCrossed) {
+                                    emberTimerCrossed = true;
+                                    Utils.Debug.log('[AutoSelect] Ember timer crossed threshold, triggering lock');
+                                    completePendingActions();
+                                } else if (v > lockMs) {
+                                    emberTimerCrossed = false;
+                                }
+                            }
+                        }
+                    };
+                    this.addObserver('session.timer.timeRemainingInMs', this, '_smUpdateTimer');
+                },
+                willDestroyElement() {
+                    Utils.Debug.log('[AutoSelect] EmberHook willDestroyElement');
+                    this.removeObserver('session.timer.timeRemainingInMs', this, '_smUpdateTimer');
+                    this._super(...arguments);
+                }
+            };
+        }
+    });
 }
 
 export function init(context) {
+    installEmberTimerHook();
+
     // Migrate legacy "instant" toggle
     if (Utils.Store.get('autoLockChampion', 'instant') !== undefined) {
         const legacyInstant = Utils.Store.get('autoLockChampion', 'instant');
@@ -448,6 +524,16 @@ export function init(context) {
 async function processChampSelectSession(s) {
     if (!isEnabled || !s) return;
 
+    if (panicActive) {
+        if (lastSessionData && s.gameId === lastSessionData.gameId) return;
+        panicActive = false;
+        Utils.Debug.log('[AutoSelect] New champ select session, auto-lock re-enabled');
+    }
+
+    lastSessionData = s;
+
+    Utils.Debug.log('[AutoSelect] processChampSelectSession: timer=', s?.timer, 'phase=', s?.phase);
+
     fetchCurrentSummoner();
 
     let myPosition = 'default';
@@ -484,12 +570,13 @@ async function processChampSelectSession(s) {
 
     const instantPick = Utils.Store.get('autoLockChampion', 'instantPick') !== false;
     const instantBan = Utils.Store.get('autoLockChampion', 'instantBan') !== false;
+    const lockBeforeEndMs = getLockBeforeEndMs();
 
     for (const action of myActions) {
       const champId = chooseChampionForAction(s, action, myPosition);
       if (!champId) continue;
 
-      const shouldComplete = shouldCompleteAction(s, action, instantPick, instantBan);
+      const shouldComplete = shouldCompleteAction(s, action, instantPick, instantBan, lockBeforeEndMs);
 
       if (action.championId === champId && action.completed === shouldComplete) {
           continue;
@@ -497,60 +584,39 @@ async function processChampSelectSession(s) {
 
       const now = Date.now();
       const lastPatchTime = lastAutoLockKeys.get(action.id + '_time') || 0;
-      
-      const delayMs = getDelay() * 1000;
-      const cooldownMs = Math.max(1500, delayMs + 500); 
+      const cooldownMs = 1500;
 
       if (now - lastPatchTime < cooldownMs) {
-          continue; 
+          continue;
       }
 
       lastAutoLockKeys.set(action.id + '_time', now);
 
-      const doPatch = async () => {
-          if (!isEnabled) return;
-          
-          const payload = { 
-              championId: champId,
-              completed: shouldComplete 
-          };
-
-                        try {
-                        if (action.type === 'ban') {
-                            Utils.Debug.log('[AutoSelect] ban patch', {
-                                actionId: action.id,
-                                phase: getChampSelectPhase(s),
-                                isInProgress: !!action.isInProgress,
-                                payload
-                            });
-                        }
-
-            await Utils.LCU.patch(`/lol-champ-select/v1/session/actions/${action.id}`, payload);
-                    } catch (err) {
-                        if (action.type === 'ban') {
-                            Utils.Debug.warn('[AutoSelect] ban patch failed', {
-                                actionId: action.id,
-                                phase: getChampSelectPhase(s),
-                                payload,
-                                err
-                            });
-                        }
-                    }
+      const payload = {
+          championId: champId,
+          completed: shouldComplete
       };
 
-      if (delayMs <= 0) {
-          doPatch();
-      } else {
-          let isCancelled = false;
-          const unregisterPanic = Utils.Panic.register(() => {
-              isCancelled = true;
-          });
+      try {
+          if (action.type === 'ban') {
+              Utils.Debug.log('[AutoSelect] ban patch', {
+                  actionId: action.id,
+                  phase: getChampSelectPhase(s),
+                  isInProgress: !!action.isInProgress,
+                  payload
+              });
+          }
 
-          setTimeout(() => {
-              unregisterPanic();
-              if (isCancelled) return;
-              doPatch();
-          }, delayMs);
+          await Utils.LCU.patch(`/lol-champ-select/v1/session/actions/${action.id}`, payload);
+      } catch (err) {
+          if (action.type === 'ban') {
+              Utils.Debug.warn('[AutoSelect] ban patch failed', {
+                  actionId: action.id,
+                  phase: getChampSelectPhase(s),
+                  payload,
+                  err
+              });
+          }
       }
     }
 }
@@ -559,8 +625,39 @@ function getChampSelectPhase(session) {
     return session?.timer?.phase || session?.phase || 'unknown';
 }
 
-function shouldCompleteAction(session, action, instantPick, instantBan) {
+function shouldCompleteAction(session, action, instantPick, instantBan, lockBeforeEndMs) {
     if (!action.isInProgress) return false;
+
+    if (lockBeforeEndMs > 0) {
+        let timerSrc = 'none';
+        let timeRemaining = null;
+
+        // Raw session snapshot + elapsed time (fresh LCU push, accounts for elapsed time even with stale session)
+        if (session?.timer?.adjustedTimeLeftInPhase !== undefined && session?.timer?.internalNowInEpochMs !== undefined) {
+            timeRemaining = Math.max(session.timer.adjustedTimeLeftInPhase - (Date.now() - session.timer.internalNowInEpochMs), 0);
+            timerSrc = 'raw-adjusted';
+        }
+        // Ember timer fallback (when raw session lacks timer data)
+        if (timeRemaining === null && emberTimerMs !== null && emberTimerMs !== undefined) {
+            timeRemaining = emberTimerMs;
+            timerSrc = 'ember';
+        }
+        // raw snapshot value directly
+        if (timeRemaining === null && session?.timer?.adjustedTimeLeftInPhase !== undefined) {
+            timeRemaining = session.timer.adjustedTimeLeftInPhase;
+            timerSrc = 'raw-snapshot';
+        }
+
+        if (timeRemaining !== null) {
+            const shouldComplete = timeRemaining <= lockBeforeEndMs;
+            if (shouldComplete && action.type === 'ban' && getChampSelectPhase(session) !== 'BAN_PICK') {
+                return false;
+            }
+            Utils.Debug.log(`[AutoSelect] lockBeforeEnd: timer=${timeRemaining}ms, threshold=${lockBeforeEndMs}ms, complete=${shouldComplete}, src=${timerSrc}`);
+            return shouldComplete;
+        }
+        Utils.Debug.warn('[AutoSelect] lockBeforeEnd enabled but no timer source available, falling through to instant');
+    }
 
     const phase = getChampSelectPhase(session);
     if (action.type === 'ban') return instantBan && phase === 'BAN_PICK';
@@ -653,8 +750,20 @@ function chooseChampionForAction(session, action, role) {
     }) || null;
 }
 
+function panic() {
+    Utils.Debug.log('[AutoSelect] Panic triggered, overriding controls');
+    panicActive = true;
+    emberTimerCrossed = false;
+    lastAutoLockKeys.clear();
+    if (window.Toast && typeof window.Toast.success === 'function') {
+        window.Toast.success('Auto Lock Override — Next champ select will re-enable');
+    }
+}
+
 function mountAutoLockChampion() {
     if (!Utils.LCU || !Utils.LCU.observe || autoLockSessionUnsub) return;
+    panicActive = false;
+    unregisterPanic = Utils.Panic.register(panic);
     autoLockSessionUnsub = Utils.LCU.observe('/lol-champ-select/v1/session', e => {
         processChampSelectSession(e.data);
     });
@@ -664,6 +773,10 @@ function mountAutoLockChampion() {
 }
 
 function unmountAutoLockChampion() {
+    if (unregisterPanic) {
+        unregisterPanic();
+        unregisterPanic = null;
+    }
     if (autoLockSessionUnsub) {
         autoLockSessionUnsub();
         autoLockSessionUnsub = null;
