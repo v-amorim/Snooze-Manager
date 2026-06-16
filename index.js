@@ -1,6 +1,6 @@
 /**
  * @name Snooze-Manager
- * @version 1.0.0
+ * @version 1.0.1
  * @author SnoozeFest - github@ReformedDoge
  * @description Modular plugin manager
  * @link https://github.com/ReformedDoge
