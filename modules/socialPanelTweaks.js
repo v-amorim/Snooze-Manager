@@ -1007,7 +1007,7 @@ function recreateSidebarStyles() {
 
         #snooze-sidebar-toggle {
             position: absolute;
-            top: 50%;
+            top: 40%;
             right: 10px;
             transform: translateY(-50%) scale(0.95);
             width: 30px;
