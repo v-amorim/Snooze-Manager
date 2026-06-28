@@ -1676,7 +1676,7 @@ export function init(context) {
     setupSettings(context);
 }
 
-const DESCRIPTION = 'Locally replaces your displayed Riot ID and optionally aliases other players (Friend / Player) in the friends list, lobby, non-ranked champ select, and match history / post-game. Cosmetic only — nothing leaves your client.';
+const DESCRIPTION = 'Locally replaces your displayed Riot ID and optionally aliases other players (Friend / Player) in the friends list, lobby, non-ranked champ select, and match history / post-game. Client-side Only.';
 
 const PLUGIN_CFG = {
     name: 'name-spoofer-settings',
@@ -1771,6 +1771,11 @@ function buildSettings(c) {
     c.appendChild(sectionTitle('Names for Other Players'));
     c.appendChild(nameRow('Friend', 'friendName', 'Friend', { numKey: 'friendNumbers', fixedDefault: true }));
     c.appendChild(nameRow('Other', 'globalName', 'Player', { numKey: 'globalNumbers', fixedDefault: true }));
+
+    const credit = document.createElement('div');
+    Object.assign(credit.style, { marginTop: 'auto', textAlign: 'right', fontSize: '11px', color: '#5a7080', paddingTop: '12px' });
+    credit.textContent = 'by Lx @iIlusion';
+    c.appendChild(credit);
 }
 
 export function load() {
