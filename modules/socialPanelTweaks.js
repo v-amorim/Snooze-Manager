@@ -19,7 +19,7 @@ const PARTY_LOCK_ATTR = 'data-sm-party-lock';
 const PARTY_HUE_SEED = 200;
 const PARTY_GOLDEN_ANGLE = 137.508;
 const LOCK_SCALE = 0.9;
-const SIDEBAR_WIDTH = 224; // Custom 224px sidebar
+const SIDEBAR_WIDTH = 224; //  Social panel sidebar
 
 const CLOSED_LOCK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="100%" height="100%" fill="none">
   <rect x="3" y="7" width="10" height="7" rx="2" fill="currentColor"/>
@@ -61,22 +61,32 @@ const RATIO_COLLAPSED = (1280 - SIDEBAR_WIDTH) / 720;
 
 let nativeClientHeight = 720;
 
-function getActivePhysicalHeight() {
+function getCwtTarget() {
+    if (window.__snoozeTargetResolution) return window.__snoozeTargetResolution;
     const tweaksEnabled = Utils.Store.get('clientWindowTweaks', 'enabled');
     const resizeEnabled = Utils.Store.get('clientWindowTweaks', 'applyResolution');
-    
     if (tweaksEnabled && resizeEnabled) {
-        const customH = Number(Utils.Store.get('clientWindowTweaks', 'height'));
-        if (customH > 0) return customH;
+        const w = Number(Utils.Store.get('clientWindowTweaks', 'width'));
+        const h = Number(Utils.Store.get('clientWindowTweaks', 'height'));
+        if (w > 0 && h > 0) return { w, h };
     }
-    
-    return nativeClientHeight;
+    return null;
+}
+
+const NATIVE_HEIGHT = 720;
+
+function getActivePhysicalHeight() {
+    const cwt = getCwtTarget();
+    if (cwt) return cwt.h;
+    return nativeClientHeight || NATIVE_HEIGHT;
 }
 
 function getPhysicalDimensions() {
-    const h = getActivePhysicalHeight();
-    const w = Math.round((window.innerWidth * h) / 720);
-    return { h, w };
+    const cwt = getCwtTarget();
+    if (cwt) return { w: cwt.w, h: cwt.h };
+    const h = nativeClientHeight || NATIVE_HEIGHT;
+    const w = Math.round((window.innerWidth * h) / NATIVE_HEIGHT);
+    return { w, h };
 }
 
 // color generation
@@ -143,12 +153,17 @@ function toggleCollapseMethod(method) {
 
     const isCurrentlyCollapsed = document.body.classList.contains('snooze-collapsed');
     if (isCurrentlyCollapsed) {
-        // Handle physical window transitions when changing settings live
-        if (typeof window?.riotInvoke === 'function') {
-            const dims = getPhysicalDimensions();
-            const h = dims.h;
-            const targetW = (method === 'crop') ? Math.round(h * RATIO_COLLAPSED) : Math.round(h * RATIO_16_9);
-            window.riotInvoke({ request: JSON.stringify({ name: 'Window.ResizeTo', params: [targetW, h] }) });
+        if (typeof window?.riotInvoke === 'function' && !document.fullscreenElement) {
+            const cwt = getCwtTarget();
+            if (cwt) {
+                const targetW = method === 'crop'
+                    ? Math.round(cwt.w * (1280 - SIDEBAR_WIDTH) / 1280) : cwt.w;
+                window.riotInvoke({ request: JSON.stringify({ name: 'Window.ResizeTo', params: [targetW, cwt.h] }) });
+            } else {
+                const targetW = method === 'crop'
+                    ? Math.round(NATIVE_HEIGHT * RATIO_COLLAPSED) : Math.round(NATIVE_HEIGHT * RATIO_16_9);
+                window.riotInvoke({ request: JSON.stringify({ name: 'Window.ResizeTo', params: [targetW, NATIVE_HEIGHT] }) });
+            }
         }
     }
 
@@ -165,13 +180,21 @@ function applyCollapsedState(isCollapsed, options = {}) {
         Utils.Store.set('socialPanelTweaks', 'isCollapsed', isCollapsed);
     }
     if (typeof window?.riotInvoke === 'function') {
-        const dims = getPhysicalDimensions();
-        const h = dims.h;
-        if (!h) return;
-        const targetW = (collapseMethod === 'crop')
-            ? Math.round(h * (isCollapsed ? RATIO_COLLAPSED : RATIO_16_9))
-            : Math.round(h * RATIO_16_9);
-        window.riotInvoke({ request: JSON.stringify({ name: 'Window.ResizeTo', params: [targetW, h] }) });
+        if (document.fullscreenElement) {
+            Utils.Debug.log('[Snooze-SocialPanelTweaks] applyCollapsedState: in fullscreen, skipping physical resize');
+            return;
+        }
+        const cwt = getCwtTarget();
+        if (cwt) {
+            const targetW = isCollapsed && collapseMethod === 'crop'
+                ? Math.round(cwt.w * (1280 - SIDEBAR_WIDTH) / 1280) : cwt.w;
+            window.riotInvoke({ request: JSON.stringify({ name: 'Window.ResizeTo', params: [targetW, cwt.h] }) });
+        } else {
+            const targetW = collapseMethod === 'crop'
+                ? Math.round(NATIVE_HEIGHT * (isCollapsed ? RATIO_COLLAPSED : RATIO_16_9))
+                : Math.round(NATIVE_HEIGHT * RATIO_16_9);
+            window.riotInvoke({ request: JSON.stringify({ name: 'Window.ResizeTo', params: [targetW, NATIVE_HEIGHT] }) });
+        }
     }
 }
 
@@ -765,7 +788,7 @@ function syncLcuObserver() {
     }
 }
 
-// Dynamic stylesheet generation depending on active method ('crop', 'stretch', or 'slide')
+// Dynamic css generation depending on active method ('crop', 'stretch', or 'slide')
 function recreateSidebarStyles() {
     let style = document.getElementById('snooze-sidebar-toggle-style');
     if (!style) {
@@ -1077,24 +1100,45 @@ function mountSidebarToggle() {
     document.body.appendChild(zone);
 
     const enforceWindowSize = () => {
+        Utils.Debug.log('[Snooze-SocialPanelTweaks] enforceWindowSize FIRED, inner:', window.innerWidth, 'x', window.innerHeight, '| fullscreen:', !!document.fullscreenElement);
         if (typeof window?.riotInvoke !== 'function') return;
+        // In fullscreen, the collapse state is visual-only (CSS class toggle).
+        // Physical ResizeTo would exit fullscreen, skip it.
+        if (document.fullscreenElement) {
+            Utils.Debug.log('[Snooze-SocialPanelTweaks] enforceWindowSize: in fullscreen, skipping physical resize');
+            return;
+        }
         const dims = getPhysicalDimensions();
         const h = dims.h;
         const w = dims.w;
         if (!h || !w) return;
 
-        const currentRatio = w / h;
         const isCurrentlyCollapsed = document.body.classList.contains('snooze-collapsed');
+        const cwt = getCwtTarget();
 
-        if (collapseMethod === 'crop') {
-            if (isCurrentlyCollapsed && Math.abs(currentRatio - RATIO_16_9) < 0.05) {
-                window.riotInvoke({ request: JSON.stringify({ name: 'Window.ResizeTo', params: [Math.round(h * RATIO_COLLAPSED), h] }) });
-            } else if (!isCurrentlyCollapsed && Math.abs(currentRatio - RATIO_COLLAPSED) < 0.05) {
-                window.riotInvoke({ request: JSON.stringify({ name: 'Window.ResizeTo', params: [Math.round(h * RATIO_16_9), h] }) });
+        if (cwt) {
+            const targetW = isCurrentlyCollapsed && collapseMethod === 'crop'
+                ? Math.round(cwt.w * (1280 - SIDEBAR_WIDTH) / 1280)
+                : cwt.w;
+            Utils.Debug.log('[Snooze-SocialPanelTweaks] enforceWindowSize: cwtActive target:', cwt.w, 'x', cwt.h, '| collapsed:', isCurrentlyCollapsed, '| targetW:', targetW);
+            if (window.innerWidth !== targetW || window.innerHeight !== cwt.h) {
+                Utils.Debug.log('[Snooze-SocialPanelTweaks] enforceWindowSize: MISMATCH, re-applying ResizeTo(', targetW, ',', cwt.h, ')');
+                window.riotInvoke({ request: JSON.stringify({ name: 'Window.ResizeTo', params: [targetW, cwt.h] }) });
+            } else {
+                Utils.Debug.log('[Snooze-SocialPanelTweaks] enforceWindowSize: MATCH, no action needed');
             }
         } else {
-            if (Math.abs(currentRatio - RATIO_16_9) > 0.05) {
-                window.riotInvoke({ request: JSON.stringify({ name: 'Window.ResizeTo', params: [Math.round(h * RATIO_16_9), h] }) });
+            const currentRatio = w / h;
+            if (collapseMethod === 'crop') {
+                if (isCurrentlyCollapsed && Math.abs(currentRatio - RATIO_16_9) < 0.05) {
+                    window.riotInvoke({ request: JSON.stringify({ name: 'Window.ResizeTo', params: [Math.round(NATIVE_HEIGHT * RATIO_COLLAPSED), NATIVE_HEIGHT] }) });
+                } else if (!isCurrentlyCollapsed && Math.abs(currentRatio - RATIO_COLLAPSED) < 0.05) {
+                    window.riotInvoke({ request: JSON.stringify({ name: 'Window.ResizeTo', params: [Math.round(NATIVE_HEIGHT * RATIO_16_9), NATIVE_HEIGHT] }) });
+                }
+            } else {
+                if (Math.abs(currentRatio - RATIO_16_9) > 0.05) {
+                    window.riotInvoke({ request: JSON.stringify({ name: 'Window.ResizeTo', params: [Math.round(NATIVE_HEIGHT * RATIO_16_9), NATIVE_HEIGHT] }) });
+                }
             }
         }
     };
@@ -1116,23 +1160,10 @@ function mountSidebarToggle() {
             e.preventDefault();
             e.stopPropagation();
 
-            const isNowCollapsed = !document.body.classList.contains('snooze-collapsed');
-            applyCollapsedState(isNowCollapsed, { persist: true });
+            applyCollapsedState(!document.body.classList.contains('snooze-collapsed'), { persist: true });
             if (isChampSelectAutoUncollapseActive) {
                 isChampSelectAutoUncollapseActive = false;
                 shouldRestoreCollapseAfterChampSelect = false;
-            }
-
-            if (typeof window?.riotInvoke === 'function') {
-                const dims = getPhysicalDimensions();
-                const h = dims.h;
-                let targetW;
-                if (collapseMethod === 'crop') {
-                    targetW = isNowCollapsed ? Math.round(h * RATIO_COLLAPSED) : Math.round(h * RATIO_16_9);
-                } else {
-                    targetW = Math.round(h * RATIO_16_9);
-                }
-                window.riotInvoke({ request: JSON.stringify({ name: 'Window.ResizeTo', params: [targetW, h] }) });
             }
         }, { capture: true });
     }

@@ -10,6 +10,7 @@ import Utils from './generalUtils.js';
 let isEnabled = false;
 let autoLockSessionUnsub = null;
 let lastAutoLockKeys = new Map();
+let actionActiveStartTimes = new Map(); // actionId -> timestamp when it first became isInProgress
 let lastBanDebugKey = '';
 
 let currentSummonerId = null;
@@ -24,8 +25,10 @@ const MAX_PRIORITY_CHAMPS = 3;
 const PICK_PRIORITY_KEY = 'pickIds';
 const BAN_PRIORITY_KEY = 'banIds';
 const LOCK_BEFORE_END_KEY = 'lockBeforeEnd';
+const HOVER_DELAY_KEY = 'hoverDelay';
 const LOCK_BEFORE_END_MIN = 0;
 const LOCK_BEFORE_END_MAX = 60;
+const HOVER_DELAY_DEFAULT = 5;
 
 function fetchCurrentSummoner() {
     if (currentSummonerId && currentPuuid) return;
@@ -44,6 +47,14 @@ function getLockBeforeEndMs() {
     const n = Number(v);
     if (!isFinite(n)) return 0;
     return Math.min(LOCK_BEFORE_END_MAX, Math.max(LOCK_BEFORE_END_MIN, n)) * 1000;
+}
+
+function getHoverDelayMs() {
+    const v = Utils.Store.get('autoLockChampion', HOVER_DELAY_KEY);
+    if (v === undefined || v === null) return HOVER_DELAY_DEFAULT * 1000;
+    const n = Number(v);
+    if (!isFinite(n) || n < 0) return 0;
+    return n * 1000;
 }
 
 function toggleFeature(enabled) {
@@ -322,6 +333,10 @@ function renderExtraSettings(container) {
         Utils.Store.set('autoLockChampion', LOCK_BEFORE_END_KEY, v);
     }));
 
+    container.appendChild(Utils.Settings.createNumberInputRow('Hover after X seconds (0 = instant, default 3)', getHoverDelayMs() / 1000, 0, 30, 0.5, (v) => {
+        Utils.Store.set('autoLockChampion', HOVER_DELAY_KEY, v);
+    }));
+
     if (Utils.LCU) {
         Utils.LCU.get('/lol-game-data/assets/v1/champion-summary.json').then(champs => {
             if (champs && champs.length) {
@@ -531,24 +546,58 @@ async function processChampSelectSession(s) {
 
     if (myActions.length === 0) {
       lastAutoLockKeys.clear();
+      actionActiveStartTimes.clear();
       return;
     }
 
     const instantPick = Utils.Store.get('autoLockChampion', 'instantPick') !== false;
     const instantBan = Utils.Store.get('autoLockChampion', 'instantBan') !== false;
     const lockBeforeEndMs = getLockBeforeEndMs();
+    const hoverDelayMs = getHoverDelayMs();
+    const now = Date.now();
 
     for (const action of myActions) {
+      const phase = getChampSelectPhase(s);
+      const isReadyForHover = 
+          (action.type === 'pick' && (action.isInProgress || phase === 'PLANNING')) ||
+          (action.type === 'ban' && action.isInProgress && phase === 'BAN_PICK');
+
+      if (isReadyForHover && !actionActiveStartTimes.has(action.id)) {
+        actionActiveStartTimes.set(action.id, now);
+        
+        // Schedule a re-evaluation when the hover delay expires
+        if (hoverDelayMs > 0) {
+            setTimeout(() => {
+                if (!isEnabled || panicActive) return;
+                Utils.LCU.get('/lol-champ-select/v1/session').then(s => {
+                    if (s) processChampSelectSession(s);
+                }).catch(() => {});
+            }, hoverDelayMs + 50);
+        }
+      }
+
+      if (!actionActiveStartTimes.has(action.id)) {
+          continue;
+      }
+
       const champId = chooseChampionForAction(s, action, myPosition);
       if (!champId) continue;
 
       const shouldComplete = shouldCompleteAction(s, action, instantPick, instantBan, lockBeforeEndMs);
 
+      // Hover delay: wait if not locking and delay hasn't elapsed
+      if (!shouldComplete && hoverDelayMs > 0) {
+        const elapsed = now - actionActiveStartTimes.get(action.id);
+        if (elapsed < hoverDelayMs) {
+          Utils.Debug.log(`[AutoSelect] Hover delay: ${elapsed}ms elapsed, waiting ${hoverDelayMs}ms before hovering action ${action.id}`);
+          continue;
+        }
+      }
+
       if (action.championId === champId && action.completed === shouldComplete) {
           continue;
       }
 
-      const now = Date.now();
       const lastPatchTime = lastAutoLockKeys.get(action.id + '_time') || 0;
       const cooldownMs = 1500;
 
@@ -721,9 +770,9 @@ function panic() {
     panicActive = true;
     emberTimerCrossed = false;
     lastAutoLockKeys.clear();
-    if (window.Toast && typeof window.Toast.success === 'function') {
-        window.Toast.success('Auto Lock Override — Next champ select will re-enable');
-    }
+    actionActiveStartTimes.clear();
+    
+    Utils.Toast.info('Auto Lock Override — Next champ select will re-enable');
 }
 
 function mountAutoLockChampion() {
@@ -748,6 +797,7 @@ function unmountAutoLockChampion() {
         autoLockSessionUnsub = null;
     }
     lastAutoLockKeys.clear();
+    actionActiveStartTimes.clear();
     lastBanDebugKey = '';
 }
 

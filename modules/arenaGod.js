@@ -247,7 +247,7 @@ export function init(context) {
         window.SnoozeManager.registerModule({
             id: 'arenaGod',
             name: 'Arena God Tracker',
-            description: 'Enhances Arena mode champion grid and progress display natively with status icons on individual grid tiles.',
+            description: 'Enhances Arena mode champion grid and progress display with status icons on individual grid tiles.',
             settings: [{
                 type: 'toggle',
                 id: SETTINGS_KEY,

@@ -128,7 +128,7 @@ export function init(context) {
         window.SnoozeManager.registerModule({
             id: 'aramNocd',
             name: 'ARAM No Cooldown',
-            description: 'Removes the cooldown when swapping champions with the ARAM bench natively.',
+            description: 'Removes the cooldown when swapping champions with the ARAM bench.',
             settings: [
                 {
                     type: 'toggle',

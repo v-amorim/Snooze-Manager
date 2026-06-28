@@ -8,6 +8,109 @@
 import Utils from './generalUtils.js';
 let augmentsCache = {};
 let augmentsLoaded = false;
+const rankCache = new Map(); // puuid -> { tier, division, lp, isUnranked }
+
+const TIER_ORDER = { IRON:1, BRONZE:2, SILVER:3, GOLD:4, PLATINUM:5, EMERALD:6, DIAMOND:7, MASTER:8, GRANDMASTER:9, CHALLENGER:10 };
+const DIV_ORDER = { I:4, II:3, III:2, IV:1 };
+const HIGH_ELO_COMPARE_SCALE = 100000; // solo vs flex pick only — not for display
+
+function formatTierName(tierName) {
+  return tierName.charAt(0) + tierName.slice(1).toLowerCase();
+}
+
+function isHighEloTier(tier) {
+  return (TIER_ORDER[tier] || 0) >= 8;
+}
+
+function divisionScore(tier, division) {
+  const tierVal = TIER_ORDER[tier];
+  if (!tierVal || tierVal >= 8) return null;
+  return (tierVal - 1) * 4 + (DIV_ORDER[division] || 1);
+}
+
+function highEloCompareValue(tier, lp) {
+  return (TIER_ORDER[tier] || 8) * HIGH_ELO_COMPARE_SCALE + (lp || 0);
+}
+
+function tierNumToHighEloLabel(tierNum) {
+  if (tierNum >= 10) return 'Challenger';
+  if (tierNum >= 9) return 'Grandmaster';
+  if (tierNum >= 8) return 'Master';
+  return null;
+}
+
+function rankBestToValue(best) {
+  if (!best || best.isUnranked) return null;
+  if (isHighEloTier(best.tier)) return highEloCompareValue(best.tier, best.lp);
+  return divisionScore(best.tier, best.division);
+}
+
+function buildDivisionEntries() {
+  const entries = [];
+  for (const tierName of Object.keys(TIER_ORDER)) {
+    const tierVal = TIER_ORDER[tierName];
+    if (tierVal >= 8) continue;
+    for (const divName of Object.keys(DIV_ORDER)) {
+      entries.push({
+        score: (tierVal - 1) * 4 + DIV_ORDER[divName],
+        tierVal,
+        label: formatTierName(tierName) + ' ' + divName
+      });
+    }
+  }
+  return entries;
+}
+const DIVISION_ENTRIES = buildDivisionEntries();
+
+function divisionScoreToLabel(score) {
+  const s = Math.round(score);
+  for (const entry of DIVISION_ENTRIES) {
+    if (s === entry.score) return entry.label;
+  }
+  let best = null;
+  let bestDist = Infinity;
+  for (const entry of DIVISION_ENTRIES) {
+    const dist = Math.abs(s - entry.score);
+    if (dist < bestDist || (dist === bestDist && entry.tierVal > (best?.tierVal ?? 0))) {
+      bestDist = dist;
+      best = entry;
+    }
+  }
+  return best?.label ?? null;
+}
+
+function computeTeamAvgLabel(bests) {
+  const ranked = bests.filter(b => b && !b.isUnranked);
+  if (ranked.length === 0) return null;
+
+  const highElo = ranked.filter(b => isHighEloTier(b.tier));
+
+  const formatHighEloAvg = (players) => {
+    const avgTierNum = Math.round(players.reduce((s, b) => s + TIER_ORDER[b.tier], 0) / players.length);
+    const avgLp = Math.round(players.reduce((s, b) => s + (b.lp || 0), 0) / players.length);
+    const tierLabel = tierNumToHighEloLabel(avgTierNum);
+    return tierLabel ? `${tierLabel} ~${avgLp} LP` : null;
+  };
+
+  // All Master+ — average tier + LP across everyone
+  if (highElo.length === ranked.length) {
+    return formatHighEloAvg(highElo);
+  }
+
+  // Mixed lobby but mostly Master+ — tier/LP from high-elo players only
+  if (highElo.length > 0 && highElo.length >= Math.ceil(ranked.length / 2)) {
+    return formatHighEloAvg(highElo);
+  }
+
+  // Mostly below Master — division averaging (Master+ collapsed to Diamond I step)
+  const values = ranked.map(b => {
+    if (isHighEloTier(b.tier)) return divisionScore('DIAMOND', 'I');
+    return divisionScore(b.tier, b.division);
+  }).filter(v => v != null);
+  if (values.length === 0) return null;
+  const avg = Math.round(values.reduce((a, b) => a + b, 0) / values.length);
+  return divisionScoreToLabel(avg);
+}
 
 const RANK_COLORS = {
   IRON: '#7b7b7b',
@@ -49,6 +152,31 @@ function getRankHtml(tier, division) {
   const rankColor = getTierColor(tier);
   const label = escapeHtml(`${tier}${division ? ' ' + division : ''}`);
   return `<span style="color:${rankColor}; font-weight:700; text-transform:uppercase; letter-spacing:0.5px;">${label}</span>`;
+}
+
+async function fetchRankForPuuid(puuid) {
+  if (!puuid) return null;
+  if (rankCache.has(puuid)) return rankCache.get(puuid);
+  try {
+    const ranked = await Utils.LCU.get('/lol-ranked/v1/ranked-stats/' + puuid).catch(() => null);
+    function parseQueue(q) {
+      if (q && q.tier && q.tier !== 'NONE' && q.tier !== 'UNRANKED') {
+        return { tier: q.tier, division: (q.division && q.division !== 'NA') ? q.division : '', lp: q.leaguePoints || 0, isUnranked: false };
+      }
+      return { tier: '', division: '', lp: 0, isUnranked: true };
+    }
+    const solo = parseQueue(ranked?.queueMap?.RANKED_SOLO_5x5);
+    const flex = parseQueue(ranked?.queueMap?.RANKED_FLEX_SR);
+    const soloValue = rankBestToValue(solo) ?? -1;
+    const flexValue = rankBestToValue(flex) ?? -1;
+    // best = whichever queue is higher; ties favour solo
+    const best = flexValue > soloValue ? { ...flex, queue: 'Flex' } : (!solo.isUnranked ? { ...solo, queue: 'Solo' } : { ...flex, queue: 'Flex' });
+    const result = { solo, flex, best };
+    rankCache.set(puuid, result);
+    return result;
+  } catch(e) {
+    return null;
+  }
 }
 
 async function loadAugments() {
@@ -191,7 +319,24 @@ async function getChampSelectPremades(session) {
     return computingPremades;
 }
 
+const ROLE_ORDER = { 'TOP': 1, 'JUNGLE': 2, 'MIDDLE': 3, 'UTILITY': 4, 'BOTTOM': 5, 'NONE': 99, 'UNSELECTED': 99, '': 99 };
+
 function sortPlayersWithPremades(players, premadeMap) {
+    const hasRoles = players.some(p => {
+        const pos = p.assignedPosition || p.selectedPosition || '';
+        return pos && pos !== 'NONE' && pos !== 'UNSELECTED';
+    });
+
+    if (hasRoles) {
+        return [...players].sort((a, b) => {
+            const posA = (a.assignedPosition || a.selectedPosition || '').toUpperCase();
+            const posB = (b.assignedPosition || b.selectedPosition || '').toUpperCase();
+            const orderA = ROLE_ORDER[posA] || 99;
+            const orderB = ROLE_ORDER[posB] || 99;
+            return orderA - orderB;
+        });
+    }
+
     const groups = new Map();
     const ungrouped = [];
     players.forEach(p => {
@@ -236,6 +381,21 @@ async function analyzePlayer(p, currentTag, premadeColor) {
     let sName = p.summonerName || 'Player';
     let puuid = p.puuid;
     
+    // consolidate the role detection
+    const assignedPos = p.assignedPosition || p.selectedPosition || '';
+    const hasAssignedRole = assignedPos && assignedPos !== 'NONE' && assignedPos !== 'UNSELECTED';
+    
+    // Fallback queue check: server could hide assigned roles in Champ Select.
+    // If we only relied on `hasAssignedRole`, we would fail to show role info.
+    const isRoleMode = hasAssignedRole || ['q_400', 'q_420', 'q_440', 'q_490', 'q_700', 'q_720'].includes(currentTag);
+
+    let roleHtml = '<div style="width:14px;height:14px;margin-right:4px;flex-shrink:0;"></div>';
+    if (hasAssignedRole) {
+        const posLower = assignedPos.toLowerCase();
+        const displayRole = posLower === 'utility' ? 'Support' : (posLower.charAt(0).toUpperCase() + posLower.slice(1));
+        roleHtml = `<img src="/fe/lol-parties/icon-position-${posLower}.png" style="width:14px;height:14px;margin-right:4px;vertical-align:middle;opacity:0.8;flex-shrink:0;" title="${displayRole}">`;
+    }
+    
     if (p.summonerId) {
       const s = await Utils.LCU.get('/lol-summoner/v1/summoners/' + p.summonerId).catch(()=>null);
       if (s) {
@@ -262,14 +422,34 @@ async function analyzePlayer(p, currentTag, premadeColor) {
 
     let wrStr = '';
     let trendHtml = '';
+    let mainRoleHtml = '';
+    let topChampsHtml = '';
+
     if (puuid) {
       try {
-        const h = await Utils.GameData.getSgpMatchHistory(puuid, 0, 10, currentTag);
+        const h = await Utils.GameData.getSgpMatchHistory(puuid, 0, 20, currentTag);
         if (h && h.games && h.games.length > 0) {
+          const roleCounts = {};
+          const champStats = {};
+
           const results = h.games.map(g => {
              const pt = g.json.participants.find(x => x.puuid === puuid) || g.json.participants[0];
              const isWin = pt.win !== undefined ? pt.win : g.json.teams.find(t=>t.teamId===pt.teamId)?.win;
              const isRemake = g.json.gameDuration < 240 && g.json.gameMode !== 'PRACTICETOOL'; 
+             
+             if (!isRemake) {
+                 const cid = pt.championId;
+                 if (cid) {
+                     if (!champStats[cid]) champStats[cid] = { plays: 0, wins: 0 };
+                     champStats[cid].plays++;
+                     if (isWin) champStats[cid].wins++;
+                 }
+                 const pos = pt.teamPosition;
+                 if (pos && ['TOP', 'JUNGLE', 'MIDDLE', 'BOTTOM', 'UTILITY'].includes(pos)) {
+                     roleCounts[pos] = (roleCounts[pos] || 0) + 1;
+                 }
+             }
+
              if (isRemake) return 'remake';
              return isWin ? 'Win' : 'Loss';
           });
@@ -279,7 +459,47 @@ async function analyzePlayer(p, currentTag, premadeColor) {
           const wr = totalValid > 0 ? Math.round((wins / totalValid) * 100) : 0;
           
           wrStr = `<span style="color:${wr >= 50 ? '#0ac8b9' : '#e84057'}">${wr}% WR</span> <span style="color:#a09b8c;font-size:11px;margin-left:4px;">(${wins}W ${totalValid - wins}L)</span>`;
-          trendHtml = `<div style="display:flex; gap:3px; margin-top:6px; justify-content:flex-end;">${results.map(res => `<div class="trend-dot ${res.toLowerCase()}"></div>`).join('')}</div>`;
+          
+          const recentResults = results.slice(0, 10);
+          trendHtml = `<div style="display:flex; gap:3px; margin-top:6px; justify-content:center; height:8px;">${recentResults.map(res => `<div class="trend-dot ${res.toLowerCase()}"></div>`).join('')}</div>`;
+
+          if (isRoleMode) {
+              let mainRole = null;
+              let maxRolePlays = 0;
+              for (const [r, count] of Object.entries(roleCounts)) {
+                  if (count > maxRolePlays) {
+                      maxRolePlays = count;
+                      mainRole = r;
+                  }
+              }
+              if (mainRole) {
+                  const posLower = mainRole.toLowerCase();
+                  const displayRole = posLower === 'utility' ? 'Support' : (posLower.charAt(0).toUpperCase() + posLower.slice(1));
+                  mainRoleHtml = `<div style="display:flex; align-items:center; justify-content:center; gap:4px; font-size:11px; color:#a09b8c; height:14px;" title="Main Role (Recent)">
+                      <span style="font-weight:600; color:#8a9aaa;">Main Role:</span>
+                      <img src="/fe/lol-parties/icon-position-${posLower}.png" style="width:14px;height:14px;opacity:0.8;">
+                      <span style="color:#f0e6d2;">${displayRole}</span>
+                  </div>`;
+              }
+          }
+
+          const sortedChamps = Object.entries(champStats).sort((a, b) => b[1].plays - a[1].plays).slice(0, 2);
+          if (sortedChamps.length > 0) {
+              const champBadges = sortedChamps.map(([cid, stats]) => {
+                  let cIcon = (Utils.GameData.Assets.getIcon && Utils.GameData.Assets.getIcon('champs', cid)) || `/lol-game-data/assets/v1/champion-icons/${cid}.png`;
+                  cIcon = cIcon.replace('/lol-game-data/assets/', '/lol-game-data/assets/');
+                  const cWr = Math.round((stats.wins / stats.plays) * 100);
+                  const wrColor = cWr >= 50 ? '#0ac8b9' : '#e84057';
+                  return `
+                    <div style="display:flex; align-items:center; gap:4px; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.05); padding:2px 6px; border-radius:4px; font-size:10px; height:22px; box-sizing:border-box;">
+                        <img src="${cIcon}" style="width:16px;height:16px;border-radius:50%;">
+                        <span style="color:#f0e6d2;font-weight:600;">${stats.plays}P</span>
+                        <span style="color:${wrColor};font-weight:600;">${cWr}%</span>
+                    </div>
+                  `;
+              }).join('');
+              topChampsHtml = `<div style="display:flex; gap:6px; justify-content:center; height:22px;">${champBadges}</div>`;
+          }
         }
       } catch(e) {}
     }
@@ -293,26 +513,27 @@ async function analyzePlayer(p, currentTag, premadeColor) {
     const safePuuid = escapeJsSingleQuoted(puuid);
     const safeTag = escapeJsSingleQuoted(currentTag);
 
-    const barBg = premadeColor || 'transparent';
-    const barShadow = premadeColor ? `box-shadow:0 0 8px ${premadeColor}80;` : '';
-    const premadeHtml = `<div style="width:4px; height:28px; background:${barBg}; border-radius:2px; margin-right:12px; ${barShadow}" title="${premadeColor ? 'Premade Group' : ''}"></div>`;
+    const borderTop = premadeColor ? `border-top:3px solid ${premadeColor};` : `border-top:1px solid rgba(255,255,255,0.03);`;
 
     return `
-      <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 12px; background:rgba(255,255,255,0.015); border-radius:6px; border:1px solid rgba(255,255,255,0.03); margin-bottom:6px; transition: background 0.2s;">
-        <div style="display:flex; align-items:center;">
-          ${premadeHtml}
-          <div style="display:grid; grid-template-columns:36px minmax(0,1fr); align-items:center; gap:12px; width:280px; min-width:0;">
-            <img src="${champIcon}" style="width:36px; height:36px; border-radius:50%; border:2px solid #785a28; cursor:pointer;" onerror="this.style.opacity=0" onclick="if(window._pmShowHistory) window._pmShowHistory('${safePuuid}', '${safeTag}')" title="View Match History"/>
-            <div style="display:flex; flex-direction:column; align-items:center; text-align:center; min-width:0;">
-              <span style="font-weight:bold; font-size:14px; color:#f0e6d2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%;">${safeSummonerName}</span>
-              <span style="color:#a09b8c; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%;">${safeChampionName}</span>
-            </div>
+      <div style="display:flex; flex-direction:column; padding:10px; background:rgba(255,255,255,0.015); border-radius:6px; border:1px solid rgba(255,255,255,0.03); ${borderTop} transition: background 0.2s; position:relative; box-sizing:border-box; height:100%; overflow:hidden;">
+        <div style="display:flex; flex-direction:column; align-items:center; text-align:center; gap:6px; margin-bottom:8px;">
+          <img src="${champIcon}" style="width:44px; height:44px; border-radius:50%; border:2px solid #785a28; cursor:pointer; flex-shrink:0;" onerror="this.style.opacity=0" onclick="if(window._pmShowHistory) window._pmShowHistory('${safePuuid}', '${safeTag}')" title="View Match History"/>
+          <div style="display:flex; flex-direction:column; align-items:center; width:100%; gap:2px;">
+            <span style="font-weight:bold; font-size:14px; color:#f0e6d2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; height:18px;" title="${safeSummonerName}">${safeSummonerName}</span>
+            <span style="color:#a09b8c; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; display:flex; align-items:center; justify-content:center; height:16px;">${roleHtml}${safeChampionName}</span>
           </div>
         </div>
-        <div style="display:flex; flex-direction:column; align-items:flex-end; text-align:right;">
-          <div style="font-size:13px; font-weight:bold;">${rankStr}</div>
-          <div style="font-size:13px; margin-top:4px;">${wrStr || '<span style="color:#746e64">No recent matches</span>'}</div>
-          ${trendHtml}
+        <div style="height:1px; background:rgba(255,255,255,0.05); margin-bottom:8px; width:100%; flex-shrink:0;"></div>
+        <div style="display:flex; flex-direction:column; align-items:center; justify-content:flex-start; text-align:center; gap:5px; width:100%; flex:1;">
+          <div style="font-size:13px; font-weight:bold; height:16px; display:flex; align-items:center; justify-content:center;">${rankStr}</div>
+          <div style="font-size:13px; height:16px; display:flex; align-items:center; justify-content:center;">${wrStr || '<span style="color:#746e64">No recent matches</span>'}</div>
+          ${trendHtml ? trendHtml : '<div style="height:8px;"></div>'}
+          
+          <div style="display:flex; flex-direction:column; align-items:center; gap:5px; margin-top:2px;">
+            ${isRoleMode ? (mainRoleHtml || '<div style="height:14px;"></div>') : ''}
+            ${topChampsHtml || '<div style="height:22px;"></div>'}
+          </div>
         </div>
       </div>
     `;
@@ -344,7 +565,16 @@ const showGameAnalysis = async () => {
     const panel = document.createElement('div');
     panel.className = 'pm-analysis-modal-container'; 
     
-    panel.style.cssText = 'position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:750px; background:rgba(1,10,19,0.75); border:1px solid rgba(200,170,110,0.2); border-radius:12px; padding:24px; z-index:2147483600; box-shadow:0 16px 48px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.05); backdrop-filter:blur(25px) saturate(140%); color:#f0e6d2; font-family:var(--font-body),sans-serif; max-height:85vh; overflow-y:auto; pointer-events:auto;';
+    let containerNode = document.querySelector('.rcp-fe-lol-game-in-progress');
+    if (containerNode) {
+        if (window.getComputedStyle(containerNode).position === 'static') {
+            containerNode.style.position = 'relative';
+        }
+        panel.style.cssText = 'position:absolute; inset:0; width:100%; height:100%; background:rgba(1,10,19,0.95); padding:24px; z-index:2147483600; overflow-y:auto; color:#f0e6d2; pointer-events:auto; box-sizing:border-box; border-radius:0; font-family:var(--font-body),sans-serif; backdrop-filter:blur(25px) saturate(140%);';
+    } else {
+        containerNode = document.body;
+        panel.style.cssText = 'position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:85%; background:rgba(1,10,19,0.95); border:1px solid rgba(200,170,110,0.2); border-radius:12px; padding:24px; z-index:2147483600; max-height:85vh; overflow-y:auto; pointer-events:auto; box-sizing:border-box; color:#f0e6d2; font-family:var(--font-body),sans-serif; backdrop-filter:blur(25px) saturate(140%);';
+    }
     
     panel.innerHTML = `
       <style>
@@ -364,11 +594,11 @@ const showGameAnalysis = async () => {
       </div>
     `;
 
-    document.body.appendChild(panel);
+    containerNode.appendChild(panel);
     analysisPanel = panel;
 
     try {
-      let html = '<div style="display:flex; flex-direction:column; gap:16px;">';
+      let html = '<div style="display:flex; flex-direction:column; gap:4px;">';
       if (session && session.gameData && session.gameData.teamOne) {
         const rawQueueId = session.gameData.queue?.id;
         const currentTag = rawQueueId ? 'q_' + rawQueueId : '';
@@ -380,13 +610,13 @@ const showGameAnalysis = async () => {
         const sortedTeam2 = sortPlayersWithPremades(session.gameData.teamTwo, team2Premades);
 
         html += '<div style="background:rgba(74,158,255,0.02); border:1px solid rgba(74,158,255,0.15); border-radius:8px; padding:12px; margin-bottom:12px;">';
-        html += '<div style="color:#4a9eff; font-weight:bold; font-size:14px; margin-bottom:12px; letter-spacing:1px; border-bottom:1px solid rgba(74,158,255,0.15); padding-bottom:6px;">TEAM 1 (BLUE)</div><div>';
+        html += '<div style="color:#4a9eff; font-weight:bold; font-size:14px; margin-bottom:12px; letter-spacing:1px; border-bottom:1px solid rgba(74,158,255,0.15); padding-bottom:6px;">TEAM 1 (BLUE)</div><div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px;">';
         const team1Htmls = await Promise.all(sortedTeam1.map(p => analyzePlayer(p, currentTag, team1Premades.get(p.puuid))));
         html += team1Htmls.join('');
         html += '</div></div>';
         
         html += '<div style="background:rgba(232,64,87,0.02); border:1px solid rgba(232,64,87,0.15); border-radius:8px; padding:12px;">';
-        html += '<div style="color:#e84057; font-weight:bold; font-size:14px; margin-bottom:12px; letter-spacing:1px; border-bottom:1px solid rgba(232,64,87,0.15); padding-bottom:6px;">TEAM 2 (RED)</div><div>';
+        html += '<div style="color:#e84057; font-weight:bold; font-size:14px; margin-bottom:12px; letter-spacing:1px; border-bottom:1px solid rgba(232,64,87,0.15); padding-bottom:6px;">TEAM 2 (RED)</div><div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px;">';
         const team2Htmls = await Promise.all(sortedTeam2.map(p => analyzePlayer(p, currentTag, team2Premades.get(p.puuid))));
         html += team2Htmls.join('');
         html += '</div></div>';
@@ -415,7 +645,7 @@ let previousPhase = null;
 
 function clearLobbyCache() {
     champSelectStatsCache.clear();
-    matchHistoryGameIdsCache.clear(); // ensure premade detection re-fetches fresh game IDs each new lobby
+    matchHistoryGameIdsCache.clear(); // clear cache for premade detection
     currentChampSelectSessionId = null;
     champSelectPremadeMap = new Map();
     computingPremades = null;
@@ -482,7 +712,7 @@ export function init(context) {
         window.SnoozeManager.registerModule({
             id: 'gameAnalysisPopup',
             name: 'Player Analysis',
-            description: 'Auto-opens a modal displaying rank and performance stats when game starts. Optionally shows stats in Champ Select.',
+            description: 'Auto-opens a modal displaying rank and performance stats when game starts. Optionally shows stats & highlights premade groups in Champ Select.',
             settings: [
                 {
                     type: 'toggle',
@@ -629,12 +859,10 @@ function renderStatsElements(el, statsData, premadeColor) {
     const legacyExisting = el.querySelector('.pm-champ-select-stats');
     if (legacyExisting) legacyExisting.remove();
 
-    // Card container has relative position to anchor absolute stats child nodes
     if (el.style.position !== 'relative') {
         el.style.position = 'relative';
     }
 
-    // Resolve top stats container
     let existingTop = el.querySelector('.pm-champ-select-stats-top');
     if (!existingTop) {
         existingTop = document.createElement('div');
@@ -642,7 +870,6 @@ function renderStatsElements(el, statsData, premadeColor) {
         el.appendChild(existingTop);
     }
 
-    // Resolve bottom stats container
     let existingBot = el.querySelector('.pm-champ-select-stats-bottom');
     if (!existingBot) {
         existingBot = document.createElement('div');
@@ -650,12 +877,11 @@ function renderStatsElements(el, statsData, premadeColor) {
         el.appendChild(existingBot);
     }
 
-    // Apply baseline styles
     Object.assign(existingTop.style, {
         position: 'absolute',
         left: '110px',    
         top: '1px',      
-        display: 'none', // Default hidden
+        display: 'none',
         alignItems: 'center',
         gap: '4px',
         zIndex: '99',
@@ -668,7 +894,7 @@ function renderStatsElements(el, statsData, premadeColor) {
         position: 'absolute',
         left: '110px',    
         bottom: '-1px',   
-        display: 'none', // Default hidden
+        display: 'none',
         alignItems: 'center',
         gap: '4px',
         zIndex: '99',
@@ -677,7 +903,6 @@ function renderStatsElements(el, statsData, premadeColor) {
         lineHeight: '1'
     });
 
-    // Check if we should render empty / hide stats
     if ((statsData.empty && !statsData.rankText && !premadeColor) || !isChampSelectStatsEnabled) {
         existingTop.style.display = 'none';
         existingTop.innerHTML = '';
@@ -799,7 +1024,7 @@ function renderStatsElements(el, statsData, premadeColor) {
 
                 Utils.Debug.log(`[GameAnalysis] didRender resolved dynamic identifier: ${idInfo.type} = ${idInfo.value}`);
 
-                // 1. History Modal Click Trigger
+                // History Modal Click Trigger
                 const icon = el.querySelector('.champion-icon-container');
                 if (icon && !icon.hasAttribute('data-pm-history')) {
                     icon.setAttribute('data-pm-history', 'true');
@@ -816,7 +1041,7 @@ function renderStatsElements(el, statsData, premadeColor) {
                         if (e.target.closest('.swap-button-component, .summoner-muted-icon')) return;
                         e.preventDefault(); e.stopPropagation();
                         
-                        // Dynamically evaluate player ID at the moment of the click
+                        // Dynamically evaluate player ID per click
                         const activeIdInfo = getPlayerId();
                         if (!activeIdInfo) {
                             Utils.Debug.warn('[GameAnalysis] Click event fired but dynamic player ID resolution returned null.');
@@ -877,7 +1102,7 @@ function renderStatsElements(el, statsData, premadeColor) {
                     });
                 }
 
-                // 2. Inline Champ Select Stats
+                // Inline Champ Select Stats
                 if (!isChampSelectStatsEnabled) {
                     const existingTop = el.querySelector('.pm-champ-select-stats-top');
                     const existingBot = el.querySelector('.pm-champ-select-stats-bottom');
@@ -891,13 +1116,11 @@ function renderStatsElements(el, statsData, premadeColor) {
                 const trackingKey = `${idInfo.type}_${idInfo.value}`;
                 const hasStats = el.querySelector('.pm-champ-select-stats-top') !== null;
 
-                // Capture the current lobby generation at render time so we can detect
-                // stale component instances that survived a lobby/phase transition.
+                // Capture the current lobby generation at render time so we can detect stale component instances that survived a lobby/phase transition
                 const myGeneration = lobbyGeneration;
                 const generationChanged = this._renderedGeneration !== myGeneration;
 
-                // If the component was carried over from a previous lobby, wipe its
-                // cached state so we never re-display another player's stats.
+                // If the component was carried over from a previous lobby, wipe its cached state so we never re-display another player's stats.
                 if (generationChanged) {
                     Utils.Debug.log(`[GameAnalysis] lobbyGeneration changed (${this._renderedGeneration} → ${myGeneration}). Discarding stale component state for ${trackingKey}.`);
                     this._renderedIdKey = null;
@@ -919,7 +1142,7 @@ function renderStatsElements(el, statsData, premadeColor) {
                     return;
                 }
 
-                // Re-render immediately from cache if DOM structures were cleared but the player remains the same
+                // Re-render from cache if DOM structures were cleared but the player remains the same
                 if (this._renderedIdKey === trackingKey && !hasStatsNow && this._renderedStats) {
                     Utils.Debug.log(`[GameAnalysis] DOM wiped but trackingKey matches active player (${trackingKey}). Restoring layout.`);
                     renderStatsElements(el, this._renderedStats, this._renderedPremadeColor);
@@ -1138,7 +1361,8 @@ export function formatTime(ts) {
 export function buildMatchRow(g, player, globalIdx) {
     const p = g.json.participants.find(x => x.puuid === player.puuid) || g.json.participants[0];
     const win = p.win !== undefined ? p.win : g.json.teams.find(t => t.teamId === p.teamId)?.win;
-    const mode = g.json.gameMode || 'UNKNOWN';
+    const qData = Utils.GameData.Assets.queues?.find(q => Number(q.id) === g.json.queueId);
+    const mode = qData ? qData.name : (g.json.gameMode || 'UNKNOWN');
     const isRemake = g.json.gameDuration < 240 && mode !== 'PRACTICETOOL';
     
     const statusClass = isRemake ? '#746e64' : (win ? '#0ac8b9' : '#e84057');
@@ -1179,6 +1403,7 @@ export function buildMatchRow(g, player, globalIdx) {
           <div style="color:${statusClass}; font-weight:bold; font-size:15px; letter-spacing:0.5px;">${statusText}</div>
           <div style="color:#a09b8c; font-size:12px; margin-top:2px; font-weight:600;">${mode}</div>
           <div style="color:#746e64; font-size:11px; margin-top:4px;">${formatTime(timestamp)}</div>
+          <span data-avg-rank-row="${g.json.gameId}" style="color:#9a7b4f; font-size:10px; margin-top:2px;"></span>
         </div>
 
         <div style="display:flex; align-items:center; gap:12px; width:140px;">
@@ -1339,6 +1564,7 @@ export const MatchHistoryModal = (function() {
   let _startIndex = 0, _isLoading = false, _hasMore = true, _currentTag = '';
   let _loadedGames = [];
   let _overrideRegion = null;
+  let _lazyRankObserver = null;
   const FETCH_COUNT = 20;
 
   function create() {
@@ -1360,7 +1586,7 @@ export const MatchHistoryModal = (function() {
 
     const modal = document.createElement('div');
     Object.assign(modal.style, {
-      position: 'relative', zIndex: '1', width: '840px', height: '700px',
+      position: 'relative', zIndex: '1', width: '1000px', maxWidth: '90vw', height: '80vh',
       background: 'rgba(1, 10, 19, 0.75)', border: '1px solid rgba(200, 170, 110, 0.2)', borderRadius: '12px',
       display: 'flex', flexDirection: 'column', color: '#a09b8c',
       boxShadow: '0 16px 48px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.05)',
@@ -1390,6 +1616,10 @@ export const MatchHistoryModal = (function() {
       _loadedGames = [];
       const listDiv = document.getElementById('pm-history-list');
       if (listDiv) listDiv.innerHTML = '';
+      if (_lazyRankObserver) {
+        _lazyRankObserver.disconnect();
+        _lazyRankObserver = null;
+      }
       loadMatches(false);
     });
     
@@ -1418,7 +1648,7 @@ export const MatchHistoryModal = (function() {
       .pm-match-row:hover { transform: translateY(-1px); background: rgba(255,255,255,0.06) !important; border-color: rgba(200,170,110,0.2) !important; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
       .pm-match-row:active { transform: translateY(0px); }
       
-      .pm-match-detail-row { position: relative; overflow: hidden; display: grid; grid-template-columns: minmax(0, 1fr) minmax(82px, 0.72fr) minmax(0, 1.15fr); column-gap: 8px; align-items: center; padding: 6px 8px; background: rgba(255, 255, 255, 0.015); border-radius: 4px; border: 1px solid rgba(255,255,255,0.04); margin-bottom: 4px; }
+      .pm-match-detail-row { position: relative; display: grid; grid-template-columns: minmax(120px, 1.5fr) minmax(82px, 0.72fr) minmax(0, 1.15fr); column-gap: 8px; align-items: center; padding: 6px 8px; background: rgba(255, 255, 255, 0.015); border-radius: 4px; border: 1px solid rgba(255,255,255,0.04); margin-bottom: 4px; }
       .pm-match-detail-row:hover { background: rgba(255, 255, 255, 0.035); }
       
       .pm-btn-back { color: #c8aa6e; transition: color 0.15s; }
@@ -1442,7 +1672,7 @@ export const MatchHistoryModal = (function() {
 
     const detailDiv = document.createElement('div');
     detailDiv.id = 'pm-history-detail';
-    Object.assign(detailDiv.style, { display: 'none', flexDirection: 'column', gap: '16px', height: '100%' });
+    Object.assign(detailDiv.style, { display: 'none', flexDirection: 'column', gap: '4px', height: '100%' });
 
     const loadingDiv = document.createElement('div');
     loadingDiv.id = 'pm-history-loading';
@@ -1467,6 +1697,36 @@ export const MatchHistoryModal = (function() {
     const viewportOverlay = document.querySelector('.rcp-fe-viewport-overlay');
     if (viewportOverlay && viewportOverlay.parentNode === document.body) viewportOverlay.after(_root);
     else document.body.appendChild(_root);
+  }
+
+  function initLazyRankObserver() {
+    if (_lazyRankObserver) return _lazyRankObserver;
+    _lazyRankObserver = new IntersectionObserver((entries, observer) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const row = entry.target;
+          observer.unobserve(row);
+          const idx = parseInt(row.getAttribute('data-idx'));
+          if (!isNaN(idx) && _loadedGames[idx]) {
+            const g = _loadedGames[idx];
+            const gameId = g.json.gameId;
+            const participants = g.json.participants || [];
+            Promise.all(participants.map(pt => fetchRankForPuuid(pt.puuid))).then(ranks => {
+              const bests = ranks.map(r => r?.best).filter(b => b && !b.isUnranked);
+              const label = computeTeamAvgLabel(bests);
+              if (!label) return;
+              const slot = row.querySelector(`[data-avg-rank-row="${gameId}"]`);
+              if (slot) slot.textContent = '~' + label;
+            });
+          }
+        }
+      });
+    }, {
+      root: _content,
+      rootMargin: '200px 0px',
+      threshold: 0
+    });
+    return _lazyRankObserver;
   }
 
   async function loadMatches(append = false) {
@@ -1504,6 +1764,14 @@ export const MatchHistoryModal = (function() {
       
       _startIndex += games.length;
       if (!_hasMore && loadingDiv) loadingDiv.textContent = 'No more matches.';
+
+      // Lazy load ranks for visible matches
+      const observer = initLazyRankObserver();
+      const addedRows = listDiv.querySelectorAll('.pm-match-row:not([data-observed])');
+      addedRows.forEach(row => {
+        row.setAttribute('data-observed', 'true');
+        observer.observe(row);
+      });
     } catch (err) {
       if (loadingDiv) loadingDiv.textContent = 'Failed to load Endpoint match history';
       Utils.Debug.error('SGP history error:', err);
@@ -1512,7 +1780,7 @@ export const MatchHistoryModal = (function() {
     if (loadingDiv && _hasMore) loadingDiv.style.display = 'none';
   }
 
-  function showMatchDetail(game) {
+  async function showMatchDetail(game) {
     const listDiv = document.getElementById('pm-history-list');
     const detailDiv = document.getElementById('pm-history-detail');
     const loadingDiv = document.getElementById('pm-history-loading');
@@ -1537,11 +1805,48 @@ export const MatchHistoryModal = (function() {
         if (loadingDiv && _hasMore) loadingDiv.style.display = 'block';
       });
     }
+
+    // Async rank fetching update DOM slots as ranks resolve
+    const participants = game.json.participants || [];
+    const myTeamId = (participants.find(p => p.puuid === _player.puuid) || participants[0])?.teamId;
+    const teamRanks = {}; // teamId -> [best rank objects]
+
+    await Promise.all(participants.map(async p => {
+      const rank = await fetchRankForPuuid(p.puuid);
+      // Update player rank slot using best rank. solo queue vs flex
+      const slot = detailDiv.querySelector(`[data-rank-slot="${p.puuid}"]`);
+      if (slot) {
+        const best = rank?.best;
+        if (best && !best.isUnranked) {
+          const color = getTierColor(best.tier);
+          const label = best.tier.charAt(0) + best.tier.slice(1).toLowerCase() + (best.division ? ' ' + best.division : '') + (best.lp ? ' · ' + best.lp + 'LP' : '');
+          slot.innerHTML = `<span style="color:${color};">${escapeHtml(label)}</span><span style="color:#5a5a5a; font-size:8px; margin-left:3px;">${best.queue}</span>`;
+        } else {
+          slot.textContent = 'Unranked';
+        }
+      }
+      if (rank?.best && !rank.best.isUnranked) {
+        if (!teamRanks[p.teamId]) teamRanks[p.teamId] = [];
+        teamRanks[p.teamId].push(rank.best);
+      }
+    }));
+
+    // Update team avg rank slots
+    Object.keys(teamRanks).forEach((teamId) => {
+      const side = String(teamId) === String(myTeamId) ? 'left' : 'right';
+      const label = computeTeamAvgLabel(teamRanks[teamId]);
+      if (!label) return;
+      const avgSlot = detailDiv.querySelector(`[data-avg-rank-slot="${side}"]`);
+      if (avgSlot) {
+        avgSlot.textContent = 'Avg: ' + label;
+      }
+    });
   }
 
   function buildMatchDetailHtml(game) {
     const participants = game.json.participants || [];
-    const mode = game.json.gameMode || 'UNKNOWN';
+    const qData = Utils.GameData.Assets.queues?.find(q => Number(q.id) === game.json.queueId);
+    const mode = qData ? qData.name : (game.json.gameMode || 'UNKNOWN');
     const durationMin = Math.floor(game.json.gameDuration / 60);
     const durationSec = game.json.gameDuration % 60;
     const dateStr = formatTime(game.json.gameCreation || 0);
@@ -1680,8 +1985,9 @@ export const MatchHistoryModal = (function() {
           ${side === 'left' ? 'YOUR TEAM' : 'ENEMY TEAM'} 
           <span style="font-size:11px; color:#a09b8c; font-weight:normal; margin-left:6px;">(${statusText})</span>
         </span>
-        <span style="font-size:11px; color:#a09b8c; font-weight:600;">
-          ${totalKills} Kills &bull; ${totalGold} Gold
+        <span style="font-size:11px; color:#a09b8c; font-weight:600; display:flex; flex-direction:column; align-items:flex-end; gap:1px;">
+          <span>${totalKills} Kills &bull; ${totalGold} Gold</span>
+          <span data-avg-rank-slot="${side}" style="font-size:10px; color:#746e64;"></span>
         </span>
       </div>
       <div style="display:flex; flex-direction:column; gap:4px;">
@@ -1791,12 +2097,13 @@ export const MatchHistoryModal = (function() {
           </div>
           <div style="display:flex; flex-direction:column; align-items:center; text-align:center; min-width:0; overflow:hidden;">
             <div style="display:flex; align-items:center; justify-content:center; min-width:0; max-width:100%;">
-              <span style="font-weight:bold; font-size:11px; color:#f0e6d2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; ${p.puuid === _player.puuid ? 'color:#c8aa6e;' : ''}" title="${safePlayerName}">
+              <span style="font-weight:bold; font-size:11px; color:#f0e6d2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; transition:color 0.15s; ${p.puuid === _player.puuid ? 'color:#c8aa6e;' : ''}" title="Click to copy: ${safePlayerName}" onclick="navigator.clipboard.writeText('${escapeJsSingleQuoted(playerName)}'); const el = this; const orig = el.innerText; const origColor = el.style.color; el.innerText = 'Copied!'; el.style.color = '#0ac8b9'; setTimeout(() => { el.innerText = orig; el.style.color = origColor; }, 1500);">
                 ${safePlayerName}
               </span>
               ${badgeHtml}
             </div>
             <span style="font-size:10px; color:#a09b8c; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%;" title="${safeChampName}">${safeChampName}</span>
+            <span data-rank-slot="${p.puuid}" style="font-size:9px; color:#746e64; margin-top:1px;">…</span>
           </div>
         </div>
         
@@ -1826,6 +2133,10 @@ export const MatchHistoryModal = (function() {
     _hasMore = true;
     _loadedGames = [];
     _overrideRegion = overrideRegion;
+    if (_lazyRankObserver) {
+      _lazyRankObserver.disconnect();
+      _lazyRankObserver = null;
+    }
     
     const listDiv = document.getElementById('pm-history-list');
     const detailDiv = document.getElementById('pm-history-detail');
@@ -1886,6 +2197,10 @@ export const MatchHistoryModal = (function() {
 
   function hide() {
     if (_root) _root.style.display = 'none';
+    if (_lazyRankObserver) {
+      _lazyRankObserver.disconnect();
+      _lazyRankObserver = null;
+    }
   }
 
   return { show, hide };

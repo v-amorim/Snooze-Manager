@@ -196,10 +196,12 @@ function injectButton() {
     
     const partiesView = partiesViewInstance.element;
     
-    let btn = document.getElementById('pm-mode-config-btn');
-    if (btn) return;
+    if (partiesView.querySelector('#pm-mode-config-btn')) return;
     
-    btn = document.createElement('button');
+    const existing = document.getElementById('pm-mode-config-btn');
+    if (existing) existing.remove();
+    
+    const btn = document.createElement('button');
     btn.type = 'button';
     btn.id = 'pm-mode-config-btn';
     btn.title = 'Configure Mode Selector';
@@ -212,7 +214,7 @@ function injectButton() {
         position: absolute; right: 58px; top: 91px;
         background: transparent; color: #c8aa6e; border: none;
         padding: 4px; display: flex; justify-content: center; align-items: center;
-        cursor: pointer; z-index: 99; opacity: 0.7; transition: opacity 0.2s, color 0.2s;
+        cursor: pointer; opacity: 0.7; transition: opacity 0.2s, color 0.2s;
     `;
     
     btn.onmouseenter = () => { btn.style.opacity = '1'; btn.style.color = '#f0e6d2'; };
@@ -441,8 +443,10 @@ export function installEmberHook() {
                     Ember.run.scheduleOnce('afterRender', null, enforceValidSelection);
                 },
                 willDestroyElement() {
-                    const btn = document.getElementById('pm-mode-config-btn');
-                    if (btn) btn.remove();
+                    if (this.element) {
+                        const btn = this.element.querySelector('#pm-mode-config-btn');
+                        if (btn) btn.remove();
+                    }
                     if (partiesViewInstance === this) partiesViewInstance = null;
                     this._super(...arguments);
                 }

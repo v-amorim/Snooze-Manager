@@ -18,6 +18,94 @@ const Debug = {
   error(...args) { if (!_debugState.enabled) return; console.error(...args); }
 };
 
+const Toast = {
+    _ensureContainer() {
+        let container = document.getElementById('snooze-toast-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'snooze-toast-container';
+            Object.assign(container.style, {
+                position: 'fixed',
+                top: '24px',
+                left: '24px',
+                zIndex: '2147483647',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '10px',
+                pointerEvents: 'none'
+            });
+
+            const style = document.createElement('style');
+            style.textContent = `
+                @keyframes snoozeToastSlideIn {
+                    from { transform: translateX(-120%); opacity: 0; filter: blur(4px); }
+                    to { transform: translateX(0); opacity: 1; filter: blur(0); }
+                }
+                @keyframes snoozeToastFadeOut {
+                    from { transform: translateX(0); opacity: 1; }
+                    to { transform: translateX(-20%); opacity: 0; filter: blur(2px); }
+                }
+                .snooze-toast {
+                    background: rgba(1, 10, 19, 0.9);
+                    border-left: 4px solid #0ac8b9;
+                    border-top: 1px solid rgba(255, 255, 255, 0.05);
+                    border-right: 1px solid rgba(255, 255, 255, 0.05);
+                    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+                    border-radius: 6px;
+                    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+                    backdrop-filter: blur(10px);
+                    color: #f0e6d2;
+                    padding: 12px 18px;
+                    font-family: var(--font-body), "Segoe UI", sans-serif;
+                    font-size: 13px;
+                    display: flex;
+                    align-items: center;
+                    gap: 12px;
+                    animation: snoozeToastSlideIn 0.35s cubic-bezier(0.2, 0.85, 0.32, 1.2) forwards;
+                    transition: all 0.3s ease;
+                }
+                .snooze-toast.hiding {
+                    animation: snoozeToastFadeOut 0.3s forwards;
+                }
+            `;
+            document.head.appendChild(style);
+            document.body.appendChild(container);
+        }
+        return container;
+    },
+
+    show(message, type = 'success', duration = 3000) {
+        const container = this._ensureContainer();
+        const toast = document.createElement('div');
+        toast.className = 'snooze-toast';
+        
+        // Colors match Snooze styling
+        const color = type === 'success' ? '#0ac8b9' : (type === 'error' ? '#e84057' : '#c8aa6e');
+        toast.style.borderLeftColor = color;
+
+        // Custom SVGs based on type
+        const iconSvg = type === 'success' 
+            ? `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`
+            : `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>`;
+
+        toast.innerHTML = `
+            <div style="display:flex;align-items:center;justify-content:center;">${iconSvg}</div>
+            <div style="font-weight:500;line-height:1.4;">${message}</div>
+        `;
+
+        container.appendChild(toast);
+
+        setTimeout(() => {
+            toast.classList.add('hiding');
+            toast.addEventListener('animationend', () => toast.remove());
+        }, duration);
+    },
+
+    success(message, duration) { this.show(message, 'success', duration); },
+    error(message, duration)   { this.show(message, 'error', duration); },
+    info(message, duration)    { this.show(message, 'info', duration); }
+};
+
 /**
  * Smart DOM observer:
  * - Runs callbacks only for matching selectors
@@ -340,7 +428,7 @@ const EmberHook = window.__SM_EmberHook || (window.__SM_EmberHook = {
 
       if (this._rules.length > 0) {
         for (const rule of this._rules) {
-          if (rule.type === 'service') continue;
+          if (rule.type === 'service' || rule.enabled === false) continue;
           const m = rule.matcher;
           let matched = false;
 
@@ -399,7 +487,7 @@ const EmberHook = window.__SM_EmberHook || (window.__SM_EmberHook = {
 
       if (this._rules.length > 0) {
         for (const rule of this._rules) {
-          if (rule.type !== 'service') continue;
+          if (rule.type !== 'service' || rule.enabled === false) continue;
           const m = rule.matcher;
           let matched = false;
 
@@ -426,6 +514,7 @@ const EmberHook = window.__SM_EmberHook || (window.__SM_EmberHook = {
   },
 
   registerRule(rule) {
+    if (rule.enabled === undefined) rule.enabled = true;
     const i = this._rules.findIndex(r => r.name === rule.name);
     if (i >= 0) {
       this._rules[i] = rule;
@@ -1368,13 +1457,8 @@ const Panic = {
                 this._callbacks.forEach(cb => {
                     try { cb(); } catch(err) {}
                 });
-                this._callbacks.clear();
 
-                if (window.Toast && typeof window.Toast.success === 'function') {
-                    window.Toast.success('Auto Actions Cancelled');
-                } else {
-                    Debug.log('Auto Actions Cancelled (Toast not found)');
-                }
+                Toast.success('Auto Actions Cancelled');
             }
         });
     },
@@ -1452,10 +1536,11 @@ function createHotkeyRow(labelText, currentKey, onChange, descriptionText) {
 export const Utils = {
     DOM: { createSmartObserver, observer },
     Hooks: { Ember: EmberHook, Fetch: FetchHook, Xhr: XhrHook, WS: WSHook },
-  Debug,
+	Debug,
     LCU,
     Store,
     Panic,
+	Toast, 
     Settings: { inject: settingsUtils, createToggleRow, createSelectRow, createNumberInputRow, createInfoBox, createHotkeyRow },
     GameData: { Assets, getSgpContext, getSgpMatchHistory }
 };
