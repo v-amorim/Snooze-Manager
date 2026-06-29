@@ -29,8 +29,7 @@ async function fetchQueues() {
         }
         _availableQueues = queues
             .filter(q => q.queueAvailability === 'Available' && q.isVisible)
-            .map(q => ({ id: q.id, name: q.name || q.description || String(q.id) }))
-            .sort((a, b) => a.id - b.id);
+            .map(q => ({ id: q.id, name: q.name || q.description || String(q.id) }));
         Utils.Debug.log('[AutoQueue]', `Loaded ${_availableQueues.length} queues:`, _availableQueues.map(q => `${q.name}(${q.id})`).join(', '));
     } catch (e) {
         Utils.Debug.warn('[AutoQueue] Failed to load queues from Assets:', e);

@@ -942,7 +942,13 @@ const Assets = {
         if (Array.isArray(q) && q.length > 0) {
           this.queues = q.filter(x => x.name && x.id).map(x => ({
             ...x, tag: 'q_' + x.id
-          })).sort((a, b) => a.name.localeCompare(b.name));
+          })).sort((a, b) => {
+            const catOrder = { PvP: 0, VersusAi: 1, Custom: 2 };
+            const ac = catOrder[a.category] ?? 3;
+            const bc = catOrder[b.category] ?? 3;
+            if (ac !== bc) return ac - bc;
+            return a.name.localeCompare(b.name);
+          });
         }
         
         this._initialized = true;
