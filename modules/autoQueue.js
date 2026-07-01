@@ -169,20 +169,60 @@ function renderSettings(container) {
     queueRow.appendChild(queueSelect);
     container.appendChild(queueRow);
 
-    const delay = Utils.Store.get('autoQueue', 'delay') || 0;
-    container.appendChild(Utils.Settings.createNumberInputRow('Delay before re-queue (seconds)', delay, 0, 60, 1, (v) => {
+    // Delay input
+    const delayRow = document.createElement('div');
+    Object.assign(delayRow.style, { display: 'flex', alignItems: 'center', gap: '10px' });
+
+    const delayLabel = document.createElement('span');
+    delayLabel.textContent = 'Delay before re-queue (seconds)';
+    Object.assign(delayLabel.style, { color: '#a09b8c', fontSize: '12px', whiteSpace: 'nowrap' });
+
+    const delayInput = document.createElement('input');
+    delayInput.type = 'number';
+    delayInput.min = '0';
+    delayInput.max = '60';
+    delayInput.step = '1';
+    delayInput.value = String(Utils.Store.get('autoQueue', 'delay') || 0);
+    Object.assign(delayInput.style, {
+        background: '#111', border: '1px solid #3e2e13', color: '#f0e6d2',
+        padding: '5px 8px', borderRadius: '2px', outline: 'none', width: '60px', fontSize: '13px'
+    });
+
+    delayInput.addEventListener('click', (e) => e.stopPropagation());
+    delayInput.addEventListener('change', () => {
+        let v = parseInt(delayInput.value, 10);
+        if (!isFinite(v) || v < 0) v = 0;
+        if (v > 60) v = 60;
+        delayInput.value = String(v);
         Utils.Store.set('autoQueue', 'delay', v);
-    }));
+    });
 
-    container.appendChild(Utils.Settings.createInfoBox(`<span style="color:#c8aa6e;font-weight:600;">Full Automation Guide:</span> For a completely hands-free journey from queue to game, make sure to also enable <b>Auto Accept</b>, <b>Auto Lock Champion</b>, and <b>Auto Honor</b> (with the <i>'Skip Honor'</i> option checked).`));
+    delayRow.appendChild(delayLabel);
+    delayRow.appendChild(delayInput);
+    container.appendChild(delayRow);
 
-    const currentPanicKey = Utils.Store.get('global', 'panicKey') || 'F2';
-    container.appendChild(Utils.Settings.createHotkeyRow(
-        'Panic Key (Cancel Auto Actions)', 
-        currentPanicKey, 
-        (newKey) => Utils.Store.set('global', 'panicKey', newKey),
-        'Note: The Panic Key only works if you have set a Delay greater than 0 seconds. You must press the key during the countdown window to cancel the auto-queue.'
-    ));
+    // Automation tip
+    const tipBox = document.createElement('div');
+    Object.assign(tipBox.style, {
+        marginTop: '8px',
+        padding: '10px',
+        background: 'rgba(0,0,0,0.2)',
+        border: '1px solid rgba(255,255,255,0.05)',
+        borderRadius: '4px',
+        color: '#8a9aaa',
+        fontSize: '12px',
+        lineHeight: '1.5'
+    });
+    tipBox.innerHTML = `<span style="color:#c8aa6e;font-weight:600;">Full Automation Guide:</span> For a completely hands-free journey from queue to game, make sure to also enable <b>Auto Accept</b>, <b>Auto Lock Champion</b>, and <b>Auto Honor</b> (with the <i>'Skip Honor'</i> option checked).`;
+
+    container.appendChild(tipBox);
+
+    // Panic key lives in the Settings tab (shared with the menu shortcut); note it here
+    const panicNote = document.createElement('div');
+    Object.assign(panicNote.style, { color: '#8a9aaa', fontSize: '12px', marginTop: '12px', lineHeight: '1.4' });
+    const panicKey = Utils.Store.get('global', 'panicKey') || 'F2';
+    panicNote.textContent = `Panic Key (${panicKey}): press it during the queue countdown to cancel auto-queue (only works with a Delay greater than 0). Set the key in the Settings tab.`;
+    container.appendChild(panicNote);
 }
 
 // Module lifecycle 
@@ -208,6 +248,7 @@ export function init(context) {
                 {
                     type: 'toggle',
                     label: 'Enable Auto Queue',
+                    description: 'Starts a new search into your chosen queue once a game finishes',
                     value: isEnabled,
                     onChange: (val) => {
                         isEnabled = val;

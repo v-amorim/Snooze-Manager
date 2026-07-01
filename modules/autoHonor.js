@@ -51,9 +51,6 @@ function renderExtraSettings(container) {
     selectRow.appendChild(select);
 
     container.appendChild(selectRow);
-    container.appendChild(Utils.Settings.createNumberInputRow('Delay between votes (ms)', getDelay(), 0, 5000, 50, (v) => {
-        Utils.Store.set('autoHonor', 'delayMs', v);
-    }));
     container.appendChild(Utils.Settings.createToggleRow('Skip Honor', Utils.Store.get('autoHonor', 'skip') || false, (next) => {
         Utils.Store.set('autoHonor', 'skip', next);
     }));
@@ -81,6 +78,7 @@ export function init(context) {
                     type: 'toggle',
                     id: 'sm:autoHonor',
                     label: 'Enable Auto Honor',
+                    description: 'Casts honor votes at end of game based on the mode set below',
                     value: isEnabled,
                     onChange: (val) => toggleFeature(val)
                 },
