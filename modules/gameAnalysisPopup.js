@@ -22,6 +22,10 @@ const RANK_COLORS = {
   CHALLENGER: '#e58c2c'
 };
 
+function isRemakeGame(json) {
+  return !!json && json.gameDuration < 240 && json.gameMode !== 'PRACTICETOOL';
+}
+
 function normalizeTier(tier) {
   return tier ? String(tier).trim().toUpperCase() : '';
 }
@@ -269,7 +273,7 @@ async function analyzePlayer(p, currentTag, premadeColor) {
           const results = h.games.map(g => {
              const pt = g.json.participants.find(x => x.puuid === puuid) || g.json.participants[0];
              const isWin = pt.win !== undefined ? pt.win : g.json.teams.find(t=>t.teamId===pt.teamId)?.win;
-             const isRemake = g.json.gameDuration < 240 && g.json.gameMode !== 'PRACTICETOOL'; 
+             const isRemake = isRemakeGame(g.json);
              if (isRemake) return 'remake';
              return isWin ? 'Win' : 'Loss';
           });
@@ -287,7 +291,6 @@ async function analyzePlayer(p, currentTag, premadeColor) {
     const champInfo = Utils.GameData.Assets.champs[p.championId];
     const champName = champInfo?.name || 'Unknown';
     let champIcon = champInfo?.squarePortraitPath || `/lol-game-data/assets/v1/champion-icons/${p.championId}.png`;
-    champIcon = champIcon.replace('/lol-game-data/assets/', '/lol-game-data/assets/');
     const safeSummonerName = escapeHtml(sName);
     const safeChampionName = escapeHtml(champName);
     const safePuuid = escapeJsSingleQuoted(puuid);
@@ -1038,8 +1041,8 @@ function renderStatsElements(el, statsData, premadeColor) {
                                     h.games.forEach(g => {
                                         const pt = g.json.participants.find(x => x.puuid === puuid) || g.json.participants[0];
                                         const isWin = pt.win !== undefined ? pt.win : g.json.teams.find(t => t.teamId === pt.teamId)?.win;
-                                        const isRemake = g.json.gameDuration < 240 && g.json.gameMode !== 'PRACTICETOOL'; 
-                                        
+                                        const isRemake = isRemakeGame(g.json);
+
                                         if (!isRemake) {
                                             totalK += (pt.kills || 0);
                                             totalD += (pt.deaths || 0);
@@ -1144,7 +1147,7 @@ export function buildMatchRow(g, player, globalIdx) {
     const p = g.json.participants.find(x => x.puuid === player.puuid) || g.json.participants[0];
     const win = p.win !== undefined ? p.win : g.json.teams.find(t => t.teamId === p.teamId)?.win;
     const mode = g.json.gameMode || 'UNKNOWN';
-    const isRemake = g.json.gameDuration < 240 && mode !== 'PRACTICETOOL';
+    const isRemake = isRemakeGame(g.json);
     
     const statusClass = isRemake ? '#746e64' : (win ? '#0ac8b9' : '#e84057');
     const bgClass = isRemake ? 'rgba(116,110,100,0.03)' : (win ? 'rgba(10,200,185,0.03)' : 'rgba(232,64,87,0.03)');
@@ -1553,7 +1556,7 @@ export const MatchHistoryModal = (function() {
     
     const me = participants.find(p => p.puuid === _player.puuid) || participants[0];
     const isWin = me.win;
-    const remakeMode = game.json.gameDuration < 240 && mode !== 'PRACTICETOOL';
+    const remakeMode = isRemakeGame(game.json);
     const statusText = remakeMode ? 'REMAKE' : (isWin ? 'VICTORY' : 'DEFEAT');
     const statusColor = remakeMode ? '#746e64' : (isWin ? '#0ac8b9' : '#e84057');
     
@@ -1727,7 +1730,6 @@ export const MatchHistoryModal = (function() {
     const champInfo = Utils.GameData.Assets.champs[p.championId];
     const champName = champInfo?.name || p.championName || 'Unknown';
     let champIcon = champInfo?.squarePortraitPath || `/lol-game-data/assets/v1/champion-icons/${p.championId}.png`;
-    champIcon = champIcon.replace('/lol-game-data/assets/', '/lol-game-data/assets/');
 
     const spell1 = Utils.GameData.Assets.getIcon('spells', p.spell1Id) || '';
     const spell2 = Utils.GameData.Assets.getIcon('spells', p.spell2Id) || '';
@@ -1752,9 +1754,7 @@ export const MatchHistoryModal = (function() {
             const name = aug?.name || `Augment ${id}`;
             const safeName = escapeHtml(name);
             let src = aug?.icon || '';
-            if (src) {
-              src = src.replace('/lol-game-data/assets/', '/lol-game-data/assets/');
-            } else {
+            if (!src) {
               src = `/lol-game-data/assets/v1/perks/${id}.png`;
             }
             return `<img src="${src}" style="width:14px;height:14px;border-radius:50%;border:1px solid #785a28;background:#000;" onerror="this.style.opacity=0" title="${safeName}"/>`;
@@ -1825,68 +1825,75 @@ export const MatchHistoryModal = (function() {
   }
 
   async function show(player, defaultTag = '', overrideRegion = null) {
-    if (!_root || !document.body.contains(_root)) create();
-    _player = player;
-    _startIndex = 0;
-    _hasMore = true;
-    _loadedGames = [];
-    _overrideRegion = overrideRegion;
-    
-    const listDiv = document.getElementById('pm-history-list');
-    const detailDiv = document.getElementById('pm-history-detail');
-    const filterSelect = document.getElementById('pm-history-filter');
-    if (listDiv) {
-      listDiv.style.display = 'flex';
-      listDiv.innerHTML = '<div style="color:#c8aa6e;text-align:center;margin-top:40px;">Loading...</div>';
-    }
-    if (detailDiv) detailDiv.style.display = 'none';
-    if (filterSelect) filterSelect.style.display = 'block';
+    try {
+      if (!_root || !document.body.contains(_root)) create();
+      _player = player;
+      _startIndex = 0;
+      _hasMore = true;
+      _loadedGames = [];
+      _overrideRegion = overrideRegion;
 
-    document.getElementById('pm-history-title').innerHTML = `<span style="color:#f0e6d2">${escapeHtml(player.gameName)}</span><span style="color:#785a28">#${escapeHtml(player.tagLine)}</span>`;
-    
-    const select = document.getElementById('pm-history-filter');
-    if (select) {
-      select.innerHTML = '<option value="">All Modes</option>';
-    }
-
-    _root.style.display = 'flex';
-    const pmRoot = document.getElementById('pm-root');
-    if (pmRoot) pmRoot.classList.remove('pm-show');
-
-    await Utils.GameData.Assets.init();
-    await loadAugments();
-
-    if (!defaultTag) {
-      try {
-        const gf = await Utils.LCU.get('/lol-gameflow/v1/session').catch(() => null);
-        if (gf?.gameData?.queue?.id) {
-          defaultTag = 'q_' + gf.gameData.queue.id;
-        } else {
-          const lobby = await Utils.LCU.get('/lol-lobby/v2/lobby').catch(() => null);
-          if (lobby?.gameConfig?.queueId) {
-            defaultTag = 'q_' + lobby.gameConfig.queueId;
-          }
-        }
-      } catch (e) {}
-    }
-    _currentTag = defaultTag;
-
-    if (select) {
-      select.innerHTML = '<option value="">All Modes</option>';
-      if (Utils.GameData.Assets.queues && Utils.GameData.Assets.queues.length > 0) {
-        Utils.GameData.Assets.queues.forEach(q => {
-          const opt = document.createElement('option');
-          opt.value = q.tag;
-          opt.textContent = q.name;
-          select.appendChild(opt);
-        });
+      const listDiv = document.getElementById('pm-history-list');
+      const detailDiv = document.getElementById('pm-history-detail');
+      const filterSelect = document.getElementById('pm-history-filter');
+      if (listDiv) {
+        listDiv.style.display = 'flex';
+        listDiv.innerHTML = '<div style="color:#c8aa6e;text-align:center;margin-top:40px;">Loading...</div>';
       }
-      const exactMatch = Array.from(select.options).some(o => o.value === _currentTag);
-      select.value = exactMatch ? _currentTag : '';
-      if (!exactMatch) _currentTag = '';
-    }
+      if (detailDiv) detailDiv.style.display = 'none';
+      if (filterSelect) filterSelect.style.display = 'block';
 
-    loadMatches(false);
+      const titleEl = document.getElementById('pm-history-title');
+      if (titleEl) {
+        titleEl.innerHTML = `<span style="color:#f0e6d2">${escapeHtml(player.gameName)}</span><span style="color:#785a28">#${escapeHtml(player.tagLine)}</span>`;
+      }
+
+      const select = document.getElementById('pm-history-filter');
+      if (select) {
+        select.innerHTML = '<option value="">All Modes</option>';
+      }
+
+      _root.style.display = 'flex';
+      const pmRoot = document.getElementById('pm-root');
+      if (pmRoot) pmRoot.classList.remove('pm-show');
+
+      await Utils.GameData.Assets.init();
+      await loadAugments();
+
+      if (!defaultTag) {
+        try {
+          const gf = await Utils.LCU.get('/lol-gameflow/v1/session').catch(() => null);
+          if (gf?.gameData?.queue?.id) {
+            defaultTag = 'q_' + gf.gameData.queue.id;
+          } else {
+            const lobby = await Utils.LCU.get('/lol-lobby/v2/lobby').catch(() => null);
+            if (lobby?.gameConfig?.queueId) {
+              defaultTag = 'q_' + lobby.gameConfig.queueId;
+            }
+          }
+        } catch (e) {}
+      }
+      _currentTag = defaultTag;
+
+      if (select) {
+        select.innerHTML = '<option value="">All Modes</option>';
+        if (Utils.GameData.Assets.queues && Utils.GameData.Assets.queues.length > 0) {
+          Utils.GameData.Assets.queues.forEach(q => {
+            const opt = document.createElement('option');
+            opt.value = q.tag;
+            opt.textContent = `${q.name} [${q.id}]`;
+            select.appendChild(opt);
+          });
+        }
+        const exactMatch = Array.from(select.options).some(o => o.value === _currentTag);
+        select.value = exactMatch ? _currentTag : '';
+        if (!exactMatch) _currentTag = '';
+      }
+
+      loadMatches(false);
+    } catch (e) {
+      Utils.Debug.warn('[GameAnalysisPopup] MatchHistoryModal.show() failed:', e);
+    }
   }
 
   function hide() {

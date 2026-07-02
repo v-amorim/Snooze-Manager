@@ -561,24 +561,27 @@ function rebuildStatusIndex(friends) {
     refreshTrackedRosterMembers();
 }
 
+// Fallback classification for when no numeric queueId is available (only
+// gameQueueType/gameMode strings) - queueId-based cases are resolved from
+// live Utils.GameData.Assets.queues data in getQueueLabel instead, so they
+// stay correct if Riot ever changes a queue's id.
 function getKnownQueueLabel(activity) {
-    const queueId = Number(activity.queueId || 0);
     const queueType = String(activity.gameQueueType || '').toUpperCase();
     const mode = String(activity.gameMode || '').toUpperCase();
 
-    if ([1700, 1710, 1750].includes(queueId) || queueType === 'CHERRY' || mode === 'CHERRY') return 'Arena';
-    if (queueId === 2400 || queueType === 'KIWI' || mode === 'KIWI') return 'ARAM: Mayhem';
-    if (queueId === 420 || queueType === 'RANKED_SOLO_5X5') return 'Solo/Duo';
-    if (queueId === 440 || queueType === 'RANKED_FLEX_SR') return 'Flex';
-    if (queueId === 450 || queueType === 'ARAM_UNRANKED_5X5' || mode === 'ARAM') return 'ARAM';
-    if (queueId === 480 || queueType === 'SWIFTPLAY' || mode === 'SWIFTPLAY') return 'Swiftplay';
-    if (queueId === 490 || queueType === 'QUICKPLAY') return 'Quickplay';
-    if (queueId === 400 || queueType === 'NORMAL_DRAFT') return 'Draft';
-    if (queueId === 430 || queueType === 'NORMAL_BLIND') return 'Blind';
-    if ([1090, 1100, 1130, 1160].includes(queueId) || queueType.includes('TFT') || mode === 'TFT') {
-        if (queueType.includes('DOUBLE_UP') || queueId === 1160) return 'TFT Double Up';
-        if (queueType.includes('TURBO') || queueType.includes('HYPER') || queueId === 1130) return 'TFT Hyper Roll';
-        if (queueType.includes('RANKED') || queueId === 1100) return 'TFT Ranked';
+    if (queueType === 'CHERRY' || mode === 'CHERRY') return 'Arena';
+    if (queueType === 'KIWI' || mode === 'KIWI') return 'ARAM: Mayhem';
+    if (queueType === 'RANKED_SOLO_5X5') return 'Solo/Duo';
+    if (queueType === 'RANKED_FLEX_SR') return 'Flex';
+    if (queueType === 'ARAM_UNRANKED_5X5' || mode === 'ARAM') return 'ARAM';
+    if (queueType === 'SWIFTPLAY' || mode === 'SWIFTPLAY') return 'Swiftplay';
+    if (queueType === 'QUICKPLAY') return 'Quickplay';
+    if (queueType === 'NORMAL_DRAFT') return 'Draft';
+    if (queueType === 'NORMAL_BLIND') return 'Blind';
+    if (queueType.includes('TFT') || mode === 'TFT') {
+        if (queueType.includes('DOUBLE_UP')) return 'TFT Double Up';
+        if (queueType.includes('TURBO') || queueType.includes('HYPER')) return 'TFT Hyper Roll';
+        if (queueType.includes('RANKED')) return 'TFT Ranked';
         return 'TFT';
     }
     return '';
@@ -615,15 +618,18 @@ function abbreviateQueueLabel(label, activity) {
 }
 
 function getQueueLabel(activity) {
+    // Prefer live queue data (Utils.GameData.Assets.queues, sourced from the
+    // LCU's own /lol-game-queues/v1/queues) over hardcoded queueId lists, so
+    // Arena/event-mode queue id changes don't need a code update to stay correct.
+    if (activity.queueId > 0) {
+        const queue = Utils.GameData.Assets.queues.find((item) => Number(item.id) === activity.queueId);
+        if (queue?.name) return abbreviateQueueLabel(queue.name, activity);
+    }
+
     const knownQueue = getKnownQueueLabel(activity);
     if (knownQueue) return knownQueue;
 
-    let label = activity.fallbackName;
-    if (activity.queueId > 0) {
-        const queue = Utils.GameData.Assets.queues.find((item) => Number(item.id) === activity.queueId);
-        if (queue?.name) label = queue.name;
-    }
-    return abbreviateQueueLabel(label, activity);
+    return abbreviateQueueLabel(activity.fallbackName, activity);
 }
 
 function formatElapsed(startedAt) {
@@ -1117,22 +1123,12 @@ function mountSidebarToggle() {
             e.stopPropagation();
 
             const isNowCollapsed = !document.body.classList.contains('snooze-collapsed');
+            // applyCollapsedState performs the Window.ResizeTo itself (and no-ops if
+            // the state is unchanged), so we must not resize again here.
             applyCollapsedState(isNowCollapsed, { persist: true });
             if (isChampSelectAutoUncollapseActive) {
                 isChampSelectAutoUncollapseActive = false;
                 shouldRestoreCollapseAfterChampSelect = false;
-            }
-
-            if (typeof window?.riotInvoke === 'function') {
-                const dims = getPhysicalDimensions();
-                const h = dims.h;
-                let targetW;
-                if (collapseMethod === 'crop') {
-                    targetW = isNowCollapsed ? Math.round(h * RATIO_COLLAPSED) : Math.round(h * RATIO_16_9);
-                } else {
-                    targetW = Math.round(h * RATIO_16_9);
-                }
-                window.riotInvoke({ request: JSON.stringify({ name: 'Window.ResizeTo', params: [targetW, h] }) });
             }
         }, { capture: true });
     }
@@ -1143,11 +1139,10 @@ function unmountSidebarToggle() {
     document.getElementById('snooze-sidebar-zone')?.remove();
     document.body.classList.remove('snooze-collapsed');
 
-    if (typeof champSelectPhaseUnsub === 'function') {
-        champSelectPhaseUnsub();
-        champSelectPhaseUnsub = null;
-    }
-    window.__snoozeSidebarGameflowListenerAdded = false;
+    // Note: champSelectPhaseUnsub is a module-wide gameflow-phase subscription
+    // (set up once in load()) also relied on by unrelated features (champ-select-
+    // mode CSS, Group Folder Invite's currentGameflowPhase check) - it must not
+    // be torn down here just because the sidebar toggle itself was disabled.
     isChampSelectAutoUncollapseActive = false;
     shouldRestoreCollapseAfterChampSelect = false;
 }
@@ -1375,7 +1370,14 @@ export function installEmberHook() {
                         const isMetaGroup = group?.isMetaGroup || (this.element && this.element.querySelector('.group.meta'));
                         
                         if (currentGameflowPhase === 'Lobby' && !isMetaGroup) {
+                            const MAX_INJECT_ATTEMPTS = 120; // ~2s at 60fps
+                            let injectAttempts = 0;
                             const tryInject = () => {
+                                if (++injectAttempts > MAX_INJECT_ATTEMPTS) {
+                                    Utils.Debug.warn('[SocialPanelTweaks] Gave up injecting Invite Folder menu item - context menu never appeared.');
+                                    return;
+                                }
+
                                 const menuEl = document.querySelector('lol-uikit-context-menu');
                                 if (!menuEl) {
                                     requestAnimationFrame(tryInject);
