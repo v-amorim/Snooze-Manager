@@ -19,15 +19,24 @@ function log(...args) {
     Utils.Debug.log('[AutoQueue]', ...args);
 }
 
-// Queue list 
+function toast(kind, message) {
+    if (window.Toast && typeof window.Toast[kind] === 'function') {
+        window.Toast[kind](message);
+    }
+}
 
+// Queue list
+
+// Returns whether the fetch produced a usable queue list, so callers (e.g.
+// the manual refresh button) can tell success from failure - fetchQueues()
+// itself never throws, it just leaves _availableQueues untouched on error.
 async function fetchQueues() {
     log('Fetching available queues from LCU...');
     try {
         const queues = await Utils.LCU.get('/lol-game-queues/v1/queues');
         if (!Array.isArray(queues)) {
             log('WARN: /lol-game-queues/v1/queues did not return an array:', queues);
-            return;
+            return false;
         }
         _availableQueues = queues
             .filter(q => q.queueAvailability === 'Available' && q.isVisible)
@@ -35,8 +44,22 @@ async function fetchQueues() {
             .sort((a, b) => a.id - b.id);
         log(`Loaded ${_availableQueues.length} queues:`, _availableQueues.map(q => `${q.name}(${q.id})`).join(', '));
         if (_onQueuesLoaded) _onQueuesLoaded();
+        return _availableQueues.length > 0;
     } catch (e) {
         Utils.Debug.warn('[AutoQueue] Failed to fetch queue list:', e);
+        return false;
+    }
+}
+
+// Manual bypass for when the initial load()-time fetch ran before the LCU's
+// game-data service had warmed up (or the request otherwise failed) and left
+// the dropdown stuck on "Loading queues..." with nothing to retry it.
+async function refreshQueuesNow() {
+    const ok = await fetchQueues();
+    if (ok) {
+        toast('success', 'Queue list refreshed');
+    } else {
+        toast('error', 'Failed to refresh queue list');
     }
 }
 
@@ -171,8 +194,43 @@ function renderSettings(container) {
         Utils.Store.set('autoQueue', 'queueId', Number(e.target.value));
     });
 
+    const refreshBtn = document.createElement('button');
+    refreshBtn.type = 'button';
+    refreshBtn.textContent = 'Refresh';
+    Object.assign(refreshBtn.style, {
+        background: 'rgba(200,170,110,0.08)',
+        border: '1px solid rgba(200,170,110,0.25)',
+        color: '#c8aa6e',
+        padding: '5px 10px',
+        borderRadius: '2px',
+        fontWeight: '700',
+        fontSize: '12px',
+        cursor: 'pointer',
+        transition: 'all 0.2s ease',
+        outline: 'none',
+        whiteSpace: 'nowrap'
+    });
+    refreshBtn.addEventListener('mouseenter', () => {
+        refreshBtn.style.background = 'rgba(200,170,110,0.16)';
+        refreshBtn.style.color = '#f0e6d2';
+    });
+    refreshBtn.addEventListener('mouseleave', () => {
+        refreshBtn.style.background = 'rgba(200,170,110,0.08)';
+        refreshBtn.style.color = '#c8aa6e';
+    });
+    refreshBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (refreshBtn.disabled) return;
+        refreshBtn.disabled = true;
+        refreshBtn.textContent = 'Refreshing...';
+        await refreshQueuesNow();
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = 'Refresh';
+    });
+
     queueRow.appendChild(queueLabel);
     queueRow.appendChild(queueSelect);
+    queueRow.appendChild(refreshBtn);
     container.appendChild(queueRow);
 
     // Delay input
