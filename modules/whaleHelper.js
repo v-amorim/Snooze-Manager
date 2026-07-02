@@ -2,7 +2,7 @@
  * @name Snooze-WhaleHelper
  * @version 1.0.1
  * @author SnoozeFest - github@ReformedDoge
- * @description Whale Helper: Rerollable Pool Button (Loot page), Drop Chance viewer (Loot page), Skin Tier Badges (Champ Select), Hide Unowned Skins/Chromas (Champion Select).
+ * @description Whale Helper: Rerollable Pool Button (Loot page), Drop Chance viewer (Loot page), Skin Tier Badges (Champ Select), Hide Unowned Skins/Chromas (Champion Select), Skin Randomizer (Champ Select).
  * @link https://github.com/ReformedDoge/Snooze-Manager
  */
 import Utils from './generalUtils.js';
@@ -23,6 +23,66 @@ let isLootEnabled     = true;
 let isSkinTierEnabled = true;
 let isDropOddsEnabled = true;
 let isHideUnownedEnabled = false;
+let isBlacklistEnabled = false;
+let isBlacklistLockedMode = false;
+
+let smSettingsArray = [];
+
+// Skin Blacklist: Set of skin/chroma IDs the user has blocked
+let skinBlacklist = new Set();
+
+function syncTogglesUI() {
+    // Update pill toggle in Editor
+    const knob = document.getElementById('sm-blacklist-knob');
+    const labelHide = document.getElementById('sm-blacklist-label-hide');
+    const labelLock = document.getElementById('sm-blacklist-label-lock');
+    if (knob && labelHide && labelLock) {
+        knob.style.left = isBlacklistLockedMode ? '24px' : '2px';
+        labelHide.style.color = !isBlacklistLockedMode ? '#c8aa6e' : '#4a6070';
+        labelLock.style.color = isBlacklistLockedMode ? '#c8aa6e' : '#4a6070';
+    }
+
+    // Update internal array values
+    const hideUnownedSetting = smSettingsArray.find(s => s.id === 'sm:hideUnownedSkins');
+    if (hideUnownedSetting) hideUnownedSetting.value = isHideUnownedEnabled;
+
+    // Update Snooze-Manager modal toggle
+    document.querySelectorAll('.pm-row').forEach(row => {
+        const titleEl = row.querySelector('.pm-label-title');
+        if (titleEl && titleEl.textContent === 'Hide Unowned Skins & Chromas (Champ Select)') {
+            const btn = row.querySelector('.pm-toggle-btn');
+            if (btn) btn.className = 'pm-toggle-btn ' + (isHideUnownedEnabled ? 'on' : 'off');
+        }
+    });
+
+    // Update legacy native settings toggle
+    document.querySelectorAll('.whale-helper-settings lol-uikit-flat-checkbox').forEach(cb => {
+        const labelEl = cb.querySelector('[slot="label"]');
+        if (labelEl && labelEl.textContent === 'Hide Unowned Skins & Chromas (Champ Select)') {
+            const input = cb.querySelector('input');
+            if (input) {
+                input.checked = isHideUnownedEnabled;
+                cb.classList.toggle('checked', isHideUnownedEnabled);
+            }
+        }
+    });
+}
+
+function loadSkinBlacklist() {
+    const stored = Utils.Store.get('whaleHelper', 'skinBlacklist');
+    skinBlacklist = new Set(Array.isArray(stored) ? stored.map(Number) : []);
+}
+
+function saveSkinBlacklist() {
+    Utils.Store.set('whaleHelper', 'skinBlacklist', [...skinBlacklist]);
+}
+
+function toggleSkinBlacklist(id) {
+    id = Number(id);
+    if (skinBlacklist.has(id)) skinBlacklist.delete(id);
+    else skinBlacklist.add(id);
+    saveSkinBlacklist();
+}
 
 // Shared Cache
 let skinsCache = new Map(); // skinId → skin object
@@ -177,7 +237,7 @@ function injectStyles() {
         .sm-whale-tab-icon.active { border-color: #c8aa6e; background: rgba(200,170,110,0.25); box-shadow: inset 0 0 0 1px #c8aa6e; }
         .sm-whale-tab-icon img { width: 100%; height: 100%; object-fit: contain; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5)); }
 
-        /* -- CHAMP SELECT TIER BADGES -- */
+        /* CHAMP SELECT TIER BADGES */
 
         .sm-tier-badge {
             display: flex; align-items: center; justify-content: center; gap: 4px;
@@ -897,7 +957,7 @@ function injectButton(actionTabsContainer) {
     if (actionTabsContainer.querySelector(`#${BTN_ID}`)) return;
 
     const btn = document.createElement('div');
-    btn.id = BTN_ID; btn.setAttribute(BTN_ATTR, 'true'); btn.title = 'Whale Helper — skins you don\'t own yet';
+    btn.id = BTN_ID; btn.setAttribute(BTN_ATTR, 'true'); btn.title = 'Whale Helper - skins you don\'t own yet';
 
     btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="-5.0 -10.0 110.0 135.0">
 	 <path d="m93.117 34.301c-0.14453-0.89453-0.85547-1.5859-1.7539-1.7031-0.89844-0.11719-1.7617 0.37109-2.1289 1.1992-0.82422 1.8594-2.5234 2.2031-5.4492 2.6602-2.7617 0.14453-5.3984 1.2148-7.4805 3.0391-1.6914-1.9023-3.8398-3.3438-6.2461-4.1875-2.2305-0.69531-4.1367-2.1758-5.3633-4.1641-0.54297-0.83203-1.5234-1.2578-2.5-1.0898-0.99609 0.16797-1.7891 0.91406-2.0234 1.8906-1.0391 4.3945-1.5508 9.5117 2.5469 14.152v0.003906c2.0859 2.2344 4.6094 4.0156 7.4141 5.2383 0.21094 0.085937 0.32813 0.32031 0.26953 0.54297-0.066406 0.28125-0.17969 0.54688-0.33594 0.79297-1.1797 1.4453-3 2.207-4.8594 2.0352-1.9336-0.17578-3.0977-1.7109-5.1562-4.6445-0.76562-1.0898-1.6328-2.3281-2.6641-3.5742-4.3789-5.2969-10.156-9.2617-16.676-11.445-2.4922-0.77344-15.43-4.1992-25.336 4.4336-6.1797 5.5586-9.4023 13.691-8.6992 21.973 0.10547 1.1562 0.29688 2.3047 0.57031 3.4336 0.015625 0.074219 0.03125 0.14844 0.054687 0.21875 0.98047 4.6328 3.7695 8.6797 7.75 11.246 4.0352 2.2773 8.4141 3.875 12.965 4.7305 3.0273 3.7695 7.6445 5.9141 12.477 5.7852h0.023437c1.0469 0.007812 2-0.61328 2.4141-1.5781 0.41406-0.96484 0.20703-2.082-0.51953-2.8359 1.3945-0.019531 2.7852-0.082031 4.1602-0.19922 3.6641 1.7031 7.668 2.5469 11.703 2.4688h0.10937c1.0273 0 1.9453-0.63672 2.3086-1.5938 0.37891-0.97656 0.11328-2.082-0.66406-2.7812-0.26172-0.23828-0.49219-0.47656-0.71094-0.71484 5.7383-1.8398 10.832-5.2852 14.672-9.9297 1.543-1.9609 2.8164-4.1211 3.7852-6.418 0.011718-0.019531 0.015624-0.039062 0.027343-0.058594h-0.003906c1.4297-3.4297 2.293-7.0664 2.5586-10.77 0.03125-0.37109 0.29688-0.67969 0.66016-0.75781 3.3359-0.61328 6.4688-2.0508 9.1055-4.1836 3.8086-3.7539 3.5117-9.8906 2.9961-13.215zm-59.426 47.715c1.5781 0.18359 3.1758 0.30469 4.7812 0.375 0.25781 0.45312 0.54688 0.89062 0.86719 1.3008-1.9805-0.14062-3.9102-0.71094-5.6484-1.6758zm-4.4883-3.8516-0.011719-0.003906c-4.3945-0.77734-8.6289-2.2891-12.52-4.4766v-0.003906c-2.5273-1.5938-4.4688-3.9609-5.5352-6.75 2.7344 0.79297 5.5703 1.1914 8.4219 1.1875 3.3477-0.011719 6.6719-0.53516 9.8594-1.5625 0.70703 0.12109 1.4062 0.28125 2.0977 0.47656 2.0625 0.60938 4 1.582 5.7148 2.875 0.52734 3.6328 2.3008 6.9648 5.0156 9.4336-4.3789 0.0625-8.75-0.33203-13.043-1.1758zm28.324-1.2305c-0.26172-0.53125-0.50781-1.082-0.76953-1.6758-0.22656-0.50781-0.46094-1.0352-0.71875-1.5742 0.57813-0.125 1.168-0.25781 1.7852-0.39453 4.8281-1.0977 9.4531-2.957 13.699-5.5078-3.6641 4.3633-8.5312 7.5469-13.996 9.1523zm30.398-31.645c-2.2266 1.7148-4.8359 2.8672-7.6016 3.3633-1.7031 0.37891-2.957 1.8281-3.082 3.5703-0.22656 3.1953-0.94141 6.3359-2.1172 9.3125-5.2734 4.2148-11.422 7.1914-18 8.7109-0.94141 0.21094-1.8242 0.40234-2.6797 0.58203-1.0508-1.5898-2.2969-3.043-3.707-4.3281-0.30078-0.28125-0.70703-0.42969-1.1211-0.41406-0.41406 0.015624-0.80469 0.19531-1.0859 0.5-0.28125 0.30078-0.42969 0.70703-0.41406 1.1211 0.015624 0.41406 0.19531 0.80469 0.5 1.0859 2.3359 2.1328 4.1445 4.7773 5.2812 7.7305 0.46875 1.1133 1.7461 2.2852 2.5156 3.3828 2.1289 3.0312 3.9648 5.6484 7.4375 5.9609 2.9883 0.29297 5.9102-0.98828 7.7148-3.3867 0.36328-0.53906 0.625-1.1406 0.78125-1.7695 0.45312-1.7148-0.42188-3.5039-2.0547-4.1992-2.3828-1.0352-4.5312-2.543-6.3125-4.4375-2.3125-2.6172-2.9648-5.5781-2.1406-10h0.003906c1.543 1.9258 3.6055 3.3711 5.9414 4.1641 2.5391 0.85547 4.7227 2.5352 6.2031 4.7734 0.3125 0.43359 0.82422 0.68359 1.3633 0.66016 0.53516-0.03125 1.0195-0.33594 1.2812-0.80859 1.3633-2.4727 3.7656-2.8438 6.5508-3.2773v0.003906c2.1602-0.14062 4.2383-0.85547 6.0273-2.0664 0.085938 2.6328-0.32422 5.8008-2.3633 7.8086z"/>
@@ -1549,7 +1609,7 @@ export function installEmberHook() {
     });
 
     Utils.Hooks.Ember.registerRule({
-        name: 'skin-tier-select-hook',
+        name: 'skin-select-hook',
         matcher: 'skin-select',
         mixin() {
             return {
@@ -1567,18 +1627,40 @@ export function installEmberHook() {
             {
                 name: 'handleSkinCarouselSkins',
                 replacement: function(original, args) {
-                    if (isHideUnownedEnabled && args && args[0] && Array.isArray(args[0])) {
-                        // Filter unlocked skins
+                    const runHideUnowned = isHideUnownedEnabled;
+                    const runBlacklist = isBlacklistEnabled && skinBlacklist.size > 0;
+
+                    if ((runHideUnowned || runBlacklist) && args && args[0] && Array.isArray(args[0])) {
                         args[0] = args[0].filter(skin => {
-                            if (!skin.unlocked && !skin.isBase && (!skin.id || skin.id % 1000 !== 0)) {
+                            if (runHideUnowned && !skin.unlocked && !skin.isBase && (!skin.id || skin.id % 1000 !== 0)) {
                                 return false;
                             }
-                            
+
+                            if (runBlacklist && skin.id && skinBlacklist.has(Number(skin.id))) {
+                                if (isBlacklistLockedMode) {
+                                    skin.unlocked = false;
+                                    if (skin.ownership) skin.ownership.owned = false;
+                                } else {
+                                    return false;
+                                }
+                            }
+
                             // Mutate childSkins in-place to preserve object references for Ember observers
                             if (skin.childSkins && Array.isArray(skin.childSkins)) {
                                 for (let i = skin.childSkins.length - 1; i >= 0; i--) {
-                                    if (!skin.childSkins[i].unlocked) {
+                                    const chroma = skin.childSkins[i];
+                                    const hideUnowned = runHideUnowned && !chroma.unlocked;
+                                    const isBlacklisted = runBlacklist && chroma.id && skinBlacklist.has(Number(chroma.id));
+
+                                    if (hideUnowned) {
                                         skin.childSkins.splice(i, 1);
+                                    } else if (isBlacklisted) {
+                                        if (isBlacklistLockedMode) {
+                                            chroma.unlocked = false;
+                                            if (chroma.ownership) chroma.ownership.owned = false;
+                                        } else {
+                                            skin.childSkins.splice(i, 1);
+                                        }
                                     }
                                 }
                             }
@@ -1591,8 +1673,380 @@ export function installEmberHook() {
         ]
     });
 
-    
-        Utils.Debug.log('[WhaleHelper] Ember hooks registered.');
+    Utils.Debug.log('[WhaleHelper] Ember hooks registered.');
+}
+
+// SKIN BLACKLIST UI
+function renderSkinBlacklistUI(container) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.015);border-radius:6px;overflow:hidden;margin-top:10px;';
+
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:10px 14px;cursor:pointer;user-select:none;';
+
+    const title = document.createElement('div');
+    title.textContent = 'Skin Blacklist Editor';
+    title.style.cssText = 'color:#c8aa6e;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;';
+
+    const expandIcon = document.createElement('div');
+    expandIcon.textContent = '▼';
+    expandIcon.style.cssText = 'font-size:10px;color:#a09b8c;transition:transform 0.2s;';
+
+    header.appendChild(title);
+    header.appendChild(expandIcon);
+    wrap.appendChild(header);
+
+    const content = document.createElement('div');
+    content.style.cssText = 'display:none;flex-direction:column;gap:10px;padding:0 14px 14px 14px;border-top:1px solid rgba(255,255,255,0.06);';
+    wrap.appendChild(content);
+
+    let isExpanded = false;
+    header.addEventListener('click', () => {
+        isExpanded = !isExpanded;
+        content.style.display = isExpanded ? 'flex' : 'none';
+        expandIcon.style.transform = isExpanded ? 'rotate(180deg)' : 'rotate(0deg)';
+    });
+
+    const modeRow = document.createElement('div');
+    modeRow.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:8px;padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,0.06);justify-content:center;';
+
+    const labelHide = document.createElement('span');
+    labelHide.id = 'sm-blacklist-label-hide';
+    labelHide.textContent = 'Hide Completely';
+    labelHide.style.cssText = `font-size:12px;font-weight:bold;transition:color 0.2s;color:${!isBlacklistLockedMode ? '#c8aa6e' : '#4a6070'};`;
+
+    const toggleWrapper = document.createElement('div');
+    toggleWrapper.style.cssText = 'width:44px;height:22px;border-radius:11px;background:rgba(0,0,0,0.4);border:1px solid rgba(200,170,110,0.3);position:relative;cursor:pointer;display:flex;align-items:center;flex-shrink:0;';
+
+    const knob = document.createElement('div');
+    knob.id = 'sm-blacklist-knob';
+    knob.style.cssText = `width:16px;height:16px;border-radius:50%;background:#c8aa6e;position:absolute;transition:left 0.2s cubic-bezier(0.2, 0.85, 0.32, 1.2);left:${isBlacklistLockedMode ? '24px' : '2px'};`;
+    toggleWrapper.appendChild(knob);
+
+    const labelLock = document.createElement('span');
+    labelLock.id = 'sm-blacklist-label-lock';
+    labelLock.textContent = 'Show as Unowned';
+    labelLock.style.cssText = `font-size:12px;font-weight:bold;transition:color 0.2s;color:${isBlacklistLockedMode ? '#c8aa6e' : '#4a6070'};`;
+
+    toggleWrapper.addEventListener('click', (e) => {
+        e.stopPropagation();
+        isBlacklistLockedMode = !isBlacklistLockedMode;
+        Utils.Store.set('whaleHelper', 'skinBlacklistLockedMode', isBlacklistLockedMode);
+
+        if (isBlacklistLockedMode && isHideUnownedEnabled) {
+            isHideUnownedEnabled = false;
+            Utils.Store.set('whaleHelper', 'hideUnownedEnabled', false);
+        }
+        syncTogglesUI();
+    });
+
+    modeRow.appendChild(labelHide);
+    modeRow.appendChild(toggleWrapper);
+    modeRow.appendChild(labelLock);
+    content.appendChild(modeRow);
+
+    const hint = document.createElement('div');
+    hint.style.cssText = 'font-size:12px;color:#4a6070;line-height:1.5;margin-top:2px;';
+    hint.textContent = 'Block specific skins or chromas so they don\'t appear in champion select.';
+    content.appendChild(hint);
+
+    const searchRow = document.createElement('div');
+    searchRow.style.cssText = 'display:flex;gap:8px;align-items:center;';
+
+    // Champion search
+    const searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.placeholder = 'Search champion name...';
+    Object.assign(searchInput.style, {
+        background: '#111', color: '#f0e6d2', border: '1px solid #3e2e13',
+        borderRadius: '2px', padding: '6px 10px', outline: 'none', fontSize: '13px', flex: '1', minWidth: '0'
+    });
+    searchInput.addEventListener('click', e => e.stopPropagation());
+
+    const clearAllBtn = document.createElement('button');
+    clearAllBtn.textContent = 'Clear All';
+    clearAllBtn.title = 'Remove all blacklisted skins';
+    clearAllBtn.style.cssText = 'padding:6px 10px;background:rgba(232,64,87,0.1);color:#e84057;border:1px solid rgba(232,64,87,0.3);border-radius:2px;cursor:pointer;font-size:12px;transition:all 0.15s;flex-shrink:0;';
+    clearAllBtn.onmouseover = () => { clearAllBtn.style.background = 'rgba(232,64,87,0.2)'; };
+    clearAllBtn.onmouseout = () => { clearAllBtn.style.background = 'rgba(232,64,87,0.1)'; };
+
+    searchRow.appendChild(searchInput);
+    searchRow.appendChild(clearAllBtn);
+    content.appendChild(searchRow);
+
+    const champList = document.createElement('div');
+    champList.style.cssText = 'display:flex;flex-direction:column;gap:2px;max-height:160px;overflow-y:auto;background:rgba(0,0,0,0.15);border:1px solid rgba(255,255,255,0.05);border-radius:6px;padding:4px;';
+    content.appendChild(champList);
+
+    const skinPanel = document.createElement('div');
+    skinPanel.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+    content.appendChild(skinPanel);
+
+    // Build champion map from skinsCache.
+    // Real skin objects retain their original `chromas` array from the raw data.
+    // We collect all chroma IDs to properly skip them and only map parent skins.
+    function buildChampMapFromCache() {
+        const champMap = new Map(); // champId -> { skins: [] }
+        const allChromaIds = new Set();
+
+        // First pass: collect all chroma IDs
+        for (const skin of skinsCache.values()) {
+            if (skin.chromas && Array.isArray(skin.chromas)) {
+                skin.chromas.forEach(c => allChromaIds.add(Number(c.id)));
+            }
+        }
+
+        // Second pass: map parent skins
+        for (const [id, skin] of skinsCache.entries()) {
+            if (allChromaIds.has(id)) continue; // skip chromas
+            if (!skin || !skin.id) continue;
+
+            const champId = Math.floor(id / 1000);
+            if (!champId) continue;
+
+            if (!champMap.has(champId)) champMap.set(champId, { skins: [] });
+            champMap.get(champId).skins.push(skin);
+        }
+        return champMap;
+    }
+
+    let champNameMap = new Map(); // champId -> name from champion-summary
+    let selectedChampId = null;
+    let expandedSkins = new Set(); // Set of skin IDs whose chromas are expanded
+
+    async function loadAndRender() {
+        // skinsCache is already populated by load(); just use it directly
+        const champMap = buildChampMapFromCache();
+
+        // Champion names come from Assets cache if available, otherwise fetch once
+        if (Object.keys(Utils.GameData.Assets.champs).length > 0) {
+            Object.values(Utils.GameData.Assets.champs).forEach(c => {
+                if (c.id > 0) champNameMap.set(c.id, c.name);
+            });
+        } else {
+            try {
+                const champs = await Utils.LCU.get('/lol-game-data/assets/v1/champion-summary.json');
+                if (Array.isArray(champs)) {
+                    champs.forEach(c => { if (c.id > 0) champNameMap.set(c.id, c.name); });
+                }
+            } catch(e) {}
+        }
+
+        // Sort champions by name
+        const sorted = [...champMap.entries()].map(([champId, data]) => ({
+            champId,
+            name: champNameMap.get(champId) || `Champion ${champId}`,
+            skins: data.skins.sort((a, b) => a.id - b.id)
+        })).sort((a, b) => a.name.localeCompare(b.name));
+
+        function renderChampList(filter = '') {
+            const scrollPos = champList.scrollTop;
+            champList.innerHTML = '';
+            const lf = filter.toLowerCase().trim();
+            sorted.filter(c => !lf || c.name.toLowerCase().includes(lf)).forEach(champ => {
+                const blacklistedCount = champ.skins.filter(s => {
+                    if (skinBlacklist.has(Number(s.id))) return true;
+                    if (s.chromas && s.chromas.some(ch => skinBlacklist.has(Number(ch.id)))) return true;
+                    return false;
+                }).length;
+
+                const row = document.createElement('div');
+                row.style.cssText = `display:flex;align-items:center;justify-content:space-between;padding:5px 8px;border-radius:4px;cursor:pointer;transition:background 0.15s;background:${selectedChampId === champ.champId ? 'rgba(200,170,110,0.12)' : 'transparent'};`;
+                row.onmouseover = () => { if (selectedChampId !== champ.champId) row.style.background = 'rgba(255,255,255,0.04)'; };
+                row.onmouseout  = () => { if (selectedChampId !== champ.champId) row.style.background = 'transparent'; };
+
+                const nameEl = document.createElement('span');
+                nameEl.textContent = champ.name;
+                nameEl.style.cssText = 'font-size:12px;color:#f0e6d2;';
+                row.appendChild(nameEl);
+
+                if (blacklistedCount > 0) {
+                    const badge = document.createElement('span');
+                    badge.textContent = `${blacklistedCount} blocked`;
+                    badge.style.cssText = 'font-size:10px;color:#e84057;background:rgba(232,64,87,0.12);border:1px solid rgba(232,64,87,0.25);border-radius:3px;padding:1px 5px;';
+                    row.appendChild(badge);
+                }
+
+                row.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    selectedChampId = champ.champId;
+                    renderChampList(searchInput.value);
+                    renderSkinList(champ);
+                });
+                champList.appendChild(row);
+            });
+            champList.scrollTop = scrollPos;
+        }
+
+        function renderSkinList(champ) {
+            const oldScroll = skinPanel.querySelector('.skin-scroll-container')?.scrollTop || 0;
+            skinPanel.innerHTML = '';
+
+            const headerRow = document.createElement('div');
+            headerRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;';
+
+            const title = document.createElement('div');
+            title.style.cssText = 'font-size:12px;font-weight:bold;color:#c8aa6e;';
+            title.textContent = `${champ.name} - Skins`;
+
+            const clearChampBtn = document.createElement('button');
+            clearChampBtn.textContent = 'Clear Champ';
+            clearChampBtn.title = 'Remove all blocks for this champion';
+            clearChampBtn.style.cssText = 'padding:2px 8px;background:rgba(232,64,87,0.1);color:#e84057;border:1px solid rgba(232,64,87,0.3);border-radius:2px;cursor:pointer;font-size:11px;transition:all 0.15s;';
+            clearChampBtn.onmouseover = () => { clearChampBtn.style.background = 'rgba(232,64,87,0.2)'; };
+            clearChampBtn.onmouseout = () => { clearChampBtn.style.background = 'rgba(232,64,87,0.1)'; };
+
+            headerRow.appendChild(title);
+            headerRow.appendChild(clearChampBtn);
+            skinPanel.appendChild(headerRow);
+
+            const skinScroll = document.createElement('div');
+            skinScroll.className = 'skin-scroll-container';
+            skinScroll.style.cssText = 'display:flex;flex-direction:column;gap:4px;max-height:200px;overflow-y:auto;';
+
+            champ.skins.forEach(skin => {
+                // Skip base skin (id % 1000 === 0)
+                if (Number(skin.id) % 1000 === 0) return;
+
+                const isBlocked = skinBlacklist.has(Number(skin.id));
+
+                const skinRow = document.createElement('div');
+                skinRow.style.cssText = 'background:rgba(255,255,255,0.015);border:1px solid rgba(255,255,255,0.04);border-radius:5px;overflow:hidden;flex-shrink:0;';
+
+                const skinHeader = document.createElement('div');
+                skinHeader.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:6px 8px;gap:8px;';
+
+                const skinName = document.createElement('span');
+                skinName.textContent = skin.name || `Skin ${skin.id}`;
+                skinName.style.cssText = `font-size:12px;color:${isBlocked ? '#e84057' : '#f0e6d2'};${isBlocked ? 'text-decoration:line-through;opacity:0.7;' : ''}`;
+
+                const blockBtn = document.createElement('button');
+                blockBtn.textContent = isBlocked ? 'Unblock' : 'Block';
+                blockBtn.style.cssText = `flex-shrink:0;padding:2px 8px;font-size:11px;border-radius:2px;cursor:pointer;border:1px solid;transition:all 0.15s;${isBlocked ? 'border-color:rgba(232,64,87,0.4);background:rgba(232,64,87,0.1);color:#e84057;' : 'border-color:rgba(200,170,110,0.3);background:rgba(200,170,110,0.06);color:#c8aa6e;'}`;
+                blockBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    toggleSkinBlacklist(skin.id);
+                    renderSkinList(champ);
+                    renderChampList(searchInput.value);
+                });
+
+                skinHeader.appendChild(skinName);
+                skinHeader.appendChild(blockBtn);
+                skinRow.appendChild(skinHeader);
+
+                // Chromas section
+                const chromas = skin.chromas || [];
+                if (chromas.length > 0) {
+                    const chromaHeader = document.createElement('div');
+                    chromaHeader.style.cssText = 'padding:3px 8px;display:flex;justify-content:space-between;align-items:center;border-top:1px solid rgba(255,255,255,0.04);cursor:pointer;background:rgba(0,0,0,0.2);';
+
+                    const chromaLabel = document.createElement('div');
+                    chromaLabel.textContent = `Chromas (${chromas.length})`;
+                    chromaLabel.style.cssText = 'font-size:10px;color:#4a6070;text-transform:uppercase;letter-spacing:0.05em;';
+
+                    const expandIcon = document.createElement('div');
+                    expandIcon.textContent = '▼';
+                    expandIcon.style.cssText = 'font-size:8px;color:#4a6070;transition:transform 0.2s;';
+
+                    chromaHeader.appendChild(chromaLabel);
+                    chromaHeader.appendChild(expandIcon);
+                    skinRow.appendChild(chromaHeader);
+
+                    const chromaSection = document.createElement('div');
+                    chromaSection.style.cssText = 'padding:4px 8px 8px 16px;display:none;flex-direction:column;gap:3px;';
+
+                    const isExpanded = expandedSkins.has(skin.id);
+                    chromaSection.style.display = isExpanded ? 'flex' : 'none';
+                    expandIcon.style.transform = isExpanded ? 'rotate(180deg)' : 'rotate(0deg)';
+
+                    chromaHeader.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        if (expandedSkins.has(skin.id)) expandedSkins.delete(skin.id);
+                        else expandedSkins.add(skin.id);
+
+                        const exp = expandedSkins.has(skin.id);
+                        chromaSection.style.display = exp ? 'flex' : 'none';
+                        expandIcon.style.transform = exp ? 'rotate(180deg)' : 'rotate(0deg)';
+                    });
+
+                    chromas.forEach(chroma => {
+                        const chromaId = Number(chroma.id);
+                        const chromaBlocked = skinBlacklist.has(chromaId);
+
+                        const chromaRow = document.createElement('div');
+                        chromaRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;flex-shrink:0;';
+
+                        const chromaName = document.createElement('span');
+                        chromaName.textContent = chroma.name || `Chroma ${chromaId}`;
+                        chromaName.style.cssText = `font-size:11px;color:${chromaBlocked ? '#e84057' : '#a09b8c'};${chromaBlocked ? 'text-decoration:line-through;opacity:0.7;' : ''}`;
+
+                        const chromaBtn = document.createElement('button');
+                        chromaBtn.textContent = chromaBlocked ? 'Unblock' : 'Block';
+                        chromaBtn.style.cssText = `flex-shrink:0;padding:1px 6px;font-size:10px;border-radius:2px;cursor:pointer;border:1px solid;transition:all 0.15s;${chromaBlocked ? 'border-color:rgba(232,64,87,0.4);background:rgba(232,64,87,0.1);color:#e84057;' : 'border-color:rgba(200,170,110,0.2);background:transparent;color:#746e64;'}`;
+                        chromaBtn.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            toggleSkinBlacklist(chromaId);
+                            renderSkinList(champ);
+                            renderChampList(searchInput.value);
+                        });
+
+                        chromaRow.appendChild(chromaName);
+                        chromaRow.appendChild(chromaBtn);
+                        chromaSection.appendChild(chromaRow);
+                    });
+
+                    skinRow.appendChild(chromaSection);
+                }
+
+                skinScroll.appendChild(skinRow);
+            });
+
+            skinPanel.appendChild(skinScroll);
+            skinScroll.scrollTop = oldScroll;
+
+            clearChampBtn.onclick = () => {
+                let changed = false;
+                champ.skins.forEach(s => {
+                    if (skinBlacklist.has(Number(s.id))) {
+                        skinBlacklist.delete(Number(s.id));
+                        changed = true;
+                    }
+                    if (s.chromas) {
+                        s.chromas.forEach(c => {
+                            if (skinBlacklist.has(Number(c.id))) {
+                                skinBlacklist.delete(Number(c.id));
+                                changed = true;
+                            }
+                        });
+                    }
+                });
+                if (changed) {
+                    saveSkinBlacklist();
+                    renderSkinList(champ);
+                    renderChampList(searchInput.value);
+                }
+            };
+        }
+
+        clearAllBtn.onclick = () => {
+            if (skinBlacklist.size > 0) {
+                skinBlacklist.clear();
+                saveSkinBlacklist();
+                renderChampList(searchInput.value);
+                if (selectedChampId) {
+                    const champ = sorted.find(c => c.champId === selectedChampId);
+                    if (champ) renderSkinList(champ);
+                }
+            }
+        };
+
+        searchInput.addEventListener('input', () => renderChampList(searchInput.value));
+        renderChampList();
+    }
+
+    loadAndRender().catch(e => Utils.Debug.error('[WhaleHelper] Skin blacklist UI error:', e));
+
+    container.appendChild(wrap);
 }
 
 export function init(context) {
@@ -1609,6 +2063,8 @@ export function init(context) {
     isSkinTierEnabled = Utils.Store.get('whaleHelper', 'skinTierEnabled') ?? true;
     isDropOddsEnabled = Utils.Store.get('whaleHelper', 'dropOddsEnabled') ?? true;
     isHideUnownedEnabled = Utils.Store.get('whaleHelper', 'hideUnownedEnabled') ?? false;
+    isBlacklistEnabled = Utils.Store.get('whaleHelper', 'skinBlacklistEnabled') ?? false;
+    isBlacklistLockedMode = Utils.Store.get('whaleHelper', 'skinBlacklistLockedMode') ?? false;
 
     if (window.SnoozeManager?.registerModule) {
         // Loot page features
@@ -1648,41 +2104,63 @@ export function init(context) {
         });
 
         // Champion select skin-carousel features
+        smSettingsArray = [
+            {
+                type: 'toggle',
+                id: 'sm:skinTierDisplay',
+                label: 'Enable Skin Tier Badges',
+                description: 'Tags each skin in the carousel with its tier badge',
+                value: isSkinTierEnabled,
+                onChange: (val) => {
+                    isSkinTierEnabled = val;
+                    Utils.Store.set('whaleHelper', 'skinTierEnabled', val);
+                    if (!val) {
+                        document.querySelectorAll(`[${BADGE_ATTR}]`).forEach(el => el.remove());
+                        unmountSessionObserver();
+                    } else {
+                        mountSessionObserver(); refreshAllBadges();
+                    }
+                }
+            },
+            {
+                type: 'toggle',
+                id: 'sm:hideUnownedSkins',
+                label: 'Hide Unowned Skins & Chromas',
+                description: 'Removes skins and chromas you don\'t own from the carousel',
+                value: isHideUnownedEnabled,
+                onChange: (val) => {
+                    isHideUnownedEnabled = val;
+                    Utils.Store.set('whaleHelper', 'hideUnownedEnabled', val);
+                    if (val && isBlacklistLockedMode) {
+                        isBlacklistLockedMode = false;
+                        Utils.Store.set('whaleHelper', 'skinBlacklistLockedMode', false);
+                    }
+                    refreshHideUnowned();
+                    syncTogglesUI();
+                }
+            },
+            {
+                type: 'toggle',
+                id: 'sm:skinBlacklistEnabled',
+                label: 'Enable Skin Blacklist',
+                description: 'Lets you block specific skins/chromas so they never show as owned or get auto-selected',
+                value: isBlacklistEnabled,
+                onChange: (val) => {
+                    isBlacklistEnabled = val;
+                    Utils.Store.set('whaleHelper', 'skinBlacklistEnabled', val);
+                }
+            },
+            {
+                type: 'custom',
+                render: (row) => renderSkinBlacklistUI(row)
+            }
+        ];
+
         window.SnoozeManager.registerModule({
             id: 'whaleHelperSkins',
             name: 'Skin Carousel Tweaks',
-            description: 'Adds skin tier badges in champion select and can hide skins & chromas you don\'t own from the skin carousel.',
-            settings: [
-                {
-                    type: 'toggle',
-                    id: 'sm:skinTierDisplay',
-                    label: 'Enable Skin Tier Badges',
-                    description: 'Tags each skin in the carousel with its tier badge',
-                    value: isSkinTierEnabled,
-                    onChange: (val) => {
-                        isSkinTierEnabled = val;
-                        Utils.Store.set('whaleHelper', 'skinTierEnabled', val);
-                        if (!val) {
-                            document.querySelectorAll(`[${BADGE_ATTR}]`).forEach(el => el.remove());
-                            unmountSessionObserver();
-                        } else {
-                            mountSessionObserver(); refreshAllBadges();
-                        }
-                    }
-                },
-                {
-                    type: 'toggle',
-                    id: 'sm:hideUnownedSkins',
-                    label: 'Hide Unowned Skins & Chromas',
-                    description: 'Removes skins and chromas you don\'t own from the carousel',
-                    value: isHideUnownedEnabled,
-                    onChange: (val) => {
-                        isHideUnownedEnabled = val;
-                        Utils.Store.set('whaleHelper', 'hideUnownedEnabled', val);
-                        refreshHideUnowned();
-                    }
-                }
-            ]
+            description: 'Adds skin tier badges in champion select, can hide skins & chromas you don\'t own from the skin carousel, and lets you blacklist specific skins.',
+            settings: smSettingsArray
         });
     } else {
         Utils.DOM.observer.observe("lol-uikit-scrollable.whale-helper-settings", (plugin) => {
@@ -1730,6 +2208,14 @@ export function init(context) {
                 isHideUnownedEnabled = val; Utils.Store.set('whaleHelper', 'hideUnownedEnabled', val);
                 refreshHideUnowned();
             }));
+
+            plugin.appendChild(Utils.Settings.createToggleRow("Enable Skin Blacklist (Champ Select)", isBlacklistEnabled, (val) => {
+                isBlacklistEnabled = val; Utils.Store.set('whaleHelper', 'skinBlacklistEnabled', val);
+            }));
+
+            const extraRow = document.createElement("div");
+            renderSkinBlacklistUI(extraRow);
+            plugin.appendChild(extraRow);
         });
     }
 }
@@ -1738,6 +2224,7 @@ export function init(context) {
 export function load() {
     injectStyles();
     loadSkinsCache().catch(() => {});
+    loadSkinBlacklist();
     if (isSkinTierEnabled) mountSessionObserver();
     installContextMenuInterceptors();
     installClickCapture();
