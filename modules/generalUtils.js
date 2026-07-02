@@ -753,7 +753,6 @@ const Assets = {
     if (!id || id <= 0) return '';
     const obj = this[type][id];
     let path = obj?.iconPath || obj?.squarePortraitPath || '';
-    if (path) path = path.replace('/lol-game-data/assets/', '/lol-game-data/assets/'); 
     return path;
   }
 };

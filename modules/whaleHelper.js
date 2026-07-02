@@ -28,6 +28,26 @@ let isHideUnownedEnabled = false;
 let skinsCache = new Map(); // skinId → skin object
 let emberHookRegistered = false;
 
+// skin-select component instances currently mounted, so the "Hide Unowned"
+// toggle can refresh an already-open carousel instead of waiting for the
+// next natural skin-carousel-skins push.
+const activeSkinSelectComponents = new Set();
+
+function refreshHideUnowned() {
+    if (!activeSkinSelectComponents.size) return;
+    Utils.LCU.get('/lol-champ-select/v1/skin-carousel-skins').then(skins => {
+        if (!Array.isArray(skins)) return;
+        activeSkinSelectComponents.forEach(component => {
+            if (typeof component.handleSkinCarouselSkins === 'function') {
+                // Re-fetch fresh (unfiltered) data each time - the hide-unowned
+                // wrap mutates childSkins in place, so reusing the component's
+                // current carouselSkins can't restore skins after a toggle-off.
+                component.handleSkinCarouselSkins(JSON.parse(JSON.stringify(skins)));
+            }
+        });
+    }).catch(() => {});
+}
+
 // Loot Diffing State
 let currentTab = 'skins';
 let searchQuery = '';
@@ -162,6 +182,7 @@ function injectStyles() {
         .sm-tier-badge {
             display: flex; align-items: center; justify-content: center; gap: 4px;
             padding: 2px 8px; border-radius: 2px; font-size: 10px; font-weight: bold;
+            font-family: var(--font-display), "Beaufort for LOL", serif;
             letter-spacing: 0.08em; text-transform: uppercase; border: 1px solid rgba(255,255,255,0.12);
             line-height: 1.4; white-space: nowrap; pointer-events: none; width: fit-content; margin: 0 auto 5px;
         }
@@ -1530,6 +1551,18 @@ export function installEmberHook() {
     Utils.Hooks.Ember.registerRule({
         name: 'skin-tier-select-hook',
         matcher: 'skin-select',
+        mixin() {
+            return {
+                didInsertElement() {
+                    if (typeof this._super === 'function') this._super(...arguments);
+                    activeSkinSelectComponents.add(this);
+                },
+                willDestroyElement() {
+                    activeSkinSelectComponents.delete(this);
+                    if (typeof this._super === 'function') this._super(...arguments);
+                }
+            };
+        },
         wraps: [
             {
                 name: 'handleSkinCarouselSkins',
@@ -1646,6 +1679,7 @@ export function init(context) {
                     onChange: (val) => {
                         isHideUnownedEnabled = val;
                         Utils.Store.set('whaleHelper', 'hideUnownedEnabled', val);
+                        refreshHideUnowned();
                     }
                 }
             ]
@@ -1694,6 +1728,7 @@ export function init(context) {
 
             plugin.appendChild(createToggle("Hide Unowned Skins & Chromas (Champ Select)", isHideUnownedEnabled, (val) => {
                 isHideUnownedEnabled = val; Utils.Store.set('whaleHelper', 'hideUnownedEnabled', val);
+                refreshHideUnowned();
             }));
         });
     }

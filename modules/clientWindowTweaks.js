@@ -389,9 +389,8 @@ function installSettingsHooks(context) {
   // Outbound XHR PUT: if something in the client writes new video settings
   // (e.g. user changes a non-resolution setting), keep our ZoomScale in the body
   // so the round-trip doesn't revert the zoom.
-  // No longer needed no push method. ignore
   Utils.Hooks.Xhr.hookReq('/lol-settings/v1/local/video', (method, url, xhr, body) => {
-    if (method !== 'PUSH' && method !== 'push') return body;
+    if (method !== 'PUT' && method !== 'put') return body;
     const targetZoom = getCurrentTargetZoom();
     if (targetZoom !== null) {
       let parsed;
@@ -478,6 +477,7 @@ function renderSettings(container, showMasterToggle = true) {
       if (next) {
         applySettings();
       } else {
+        enableFreeResizing(false);
         restoreNativeWindowState();
       }
     }
