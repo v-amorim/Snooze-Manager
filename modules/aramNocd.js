@@ -16,21 +16,31 @@ function toggleFeature(enabled) {
 
 function makeComputedOverride(Ember, valueToForce) {
     const version = Ember.VERSION ? parseFloat(Ember.VERSION) : 1.0;
+    // Backing store for the real/native value, scoped per-instance and per-property
+    // via this Symbol's closure, so the getter can return it when disabled instead
+    // of always reporting `false`.
+    const backingKey = Symbol('aramNocdBacking');
     if (version >= 1.12) {
         return Ember.computed({
             get() {
-                return isEnabled ? valueToForce : false;
+                if (isEnabled) return valueToForce;
+                return this[backingKey] !== undefined ? this[backingKey] : false;
             },
             set(key, value) {
-                return isEnabled ? valueToForce : value;
+                if (isEnabled) return valueToForce;
+                this[backingKey] = value;
+                return value;
             }
         });
     } else {
         return Ember.computed(function(key, value) {
             if (arguments.length > 1) {
-                return isEnabled ? valueToForce : value;
+                if (isEnabled) return valueToForce;
+                this[backingKey] = value;
+                return value;
             }
-            return isEnabled ? valueToForce : false;
+            if (isEnabled) return valueToForce;
+            return this[backingKey] !== undefined ? this[backingKey] : false;
         });
     }
 }

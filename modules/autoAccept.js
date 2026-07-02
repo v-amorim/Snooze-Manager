@@ -15,7 +15,7 @@ const DELAY_MAX = 10;
 
 let isEnabled = false;
 let acceptedCurrentReadyCheck = false;
-let wasInReadyCheck = false;
+let declinedCurrentReadyCheck = false;
 
 function toggleAutoAccept(enabled) {
     isEnabled = enabled;
@@ -161,47 +161,41 @@ export function init(context) {
 export function load() {
     if (Utils.LCU && Utils.LCU.observe) {
         Utils.LCU.observe('/lol-gameflow/v1/gameflow-phase', e => {
-            const phase = e.data;
-            const exitOnDecline = Utils.Store.get('autoAccept', EXIT_ON_DECLINE_KEY);
-
-            if (phase === 'ReadyCheck') {
-                wasInReadyCheck = true;
+            if (e.data !== 'ReadyCheck') {
                 acceptedCurrentReadyCheck = false;
-                if (!isEnabled) return;
-                if (acceptedCurrentReadyCheck) return;
-                acceptedCurrentReadyCheck = true;
+                declinedCurrentReadyCheck = false;
+                return;
+            }
 
-                const delay = getDelay();
-                if (delay <= 0) {
-                    Utils.LCU.post('/lol-matchmaking/v1/ready-check/accept').catch(() => {});
-                } else {
-                    let isCancelled = false;
-                    const unregisterPanic = Utils.Panic.register(() => {
-                        isCancelled = true;
-                    });
+            if (!isEnabled) return;
 
-                    setTimeout(() => {
-                        unregisterPanic();
-                        if (isCancelled || !isEnabled || !acceptedCurrentReadyCheck) return;
-                        Utils.LCU.post('/lol-matchmaking/v1/ready-check/accept').catch(() => {});
-                    }, delay * 1000);
-                }
-            } else if (phase === 'Lobby' && wasInReadyCheck && exitOnDecline) {
-                wasInReadyCheck = false;
-                acceptedCurrentReadyCheck = false;
-                Utils.Debug.log('[AutoAccept] ReadyCheck ended without accepting (decline/timeout). Exiting queue...');
-                Utils.LCU.delete('/lol-lobby/v2/lobby/matchmaking/search').catch(() => {});
+            if (acceptedCurrentReadyCheck) return;
+            acceptedCurrentReadyCheck = true;
+
+            const delay = getDelay();
+            if (delay <= 0) {
+                Utils.LCU.post('/lol-matchmaking/v1/ready-check/accept').catch(() => {});
             } else {
-                wasInReadyCheck = false;
-                acceptedCurrentReadyCheck = false;
+                let isCancelled = false;
+                const unregisterPanic = Utils.Panic.register(() => {
+                    isCancelled = true;
+                });
+
+                setTimeout(() => {
+                    unregisterPanic();
+                    if (isCancelled || !isEnabled || !acceptedCurrentReadyCheck) return;
+                    Utils.LCU.post('/lol-matchmaking/v1/ready-check/accept').catch(() => {});
+                }, delay * 1000);
             }
         });
 
         Utils.LCU.observe('/lol-matchmaking/v1/ready-check', e => {
             if (!e.data || !Utils.Store.get('autoAccept', EXIT_ON_DECLINE_KEY)) return;
+            if (declinedCurrentReadyCheck) return;
             if (e.data.state === 'StrangerNotReady' || e.data.state === 'PartyNotReady') {
+                declinedCurrentReadyCheck = true;
                 Utils.Debug.log('[AutoAccept] Queue declined by someone. Exiting queue...');
-                Utils.LCU.delete('/lol-lobby/v2/lobby/matchmaking/search').catch(() => {});
+                Utils.LCU.delete('/lol-matchmaking/v1/search').catch(() => {});
             }
         });
     }

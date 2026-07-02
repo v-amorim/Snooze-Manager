@@ -309,7 +309,7 @@ function openConfigModal() {
 
         content.appendChild(createSection('Navigation Tabs', navs, hiddenNavs, '', '', null, getLabel));
         content.appendChild(createSection('Game Modes', modes, hiddenModes, '', '', renderLists, getLabel));
-        content.appendChild(createSection('Queues', queues, hiddenQueues, 'id', 'name', null, (label) => label)); 
+        content.appendChild(createSection('Queues', queues, hiddenQueues, 'id', 'name', null, (label, id) => `${label} [${id}]`));
     }
 
     function createSection(titleText, items, hiddenSet, idKey, labelKey, onToggleCallback, labelFormatter) {
@@ -337,7 +337,7 @@ function openConfigModal() {
         uniqueItems.forEach(item => {
             const id = typeof item === 'object' ? item[idKey] : item;
             const rawLabel = typeof item === 'object' ? item[labelKey] : item;
-            const cleanLabel = labelFormatter(rawLabel); 
+            const cleanLabel = labelFormatter(rawLabel, id);
             
             const row = document.createElement('div');
             row.className = 'pm-row';
@@ -443,6 +443,7 @@ export function installEmberHook() {
                 willDestroyElement() {
                     const btn = document.getElementById('pm-mode-config-btn');
                     if (btn) btn.remove();
+                    document.getElementById('pm-mode-modal-overlay')?.remove();
                     if (partiesViewInstance === this) partiesViewInstance = null;
                     this._super(...arguments);
                 }

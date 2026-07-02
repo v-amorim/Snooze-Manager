@@ -12,27 +12,31 @@ let _armed = false;
 // Prevent double-firing
 let _queuing = false;
 
-let _availableQueues = []; // [{ id, name }] from Utils.GameData.Assets
+let _availableQueues = []; // [{ id, name }] fetched from LCU once
+let _onQueuesLoaded = null; // set by renderSettings; re-renders the select once fetchQueues() resolves
+
+function log(...args) {
+    Utils.Debug.log('[AutoQueue]', ...args);
+}
 
 // Queue list 
 
 async function fetchQueues() {
-    Utils.Debug.log('[AutoQueue]', 'Loading queues...');
+    log('Fetching available queues from LCU...');
     try {
-        if (!Utils.GameData.Assets._initialized) {
-            await Utils.GameData.Assets.init();
-        }
-        const queues = Utils.GameData.Assets.queues;
-        if (!Array.isArray(queues) || queues.length === 0) {
-            Utils.Debug.log('[AutoQueue]', 'No queues available from Assets.');
+        const queues = await Utils.LCU.get('/lol-game-queues/v1/queues');
+        if (!Array.isArray(queues)) {
+            log('WARN: /lol-game-queues/v1/queues did not return an array:', queues);
             return;
         }
         _availableQueues = queues
             .filter(q => q.queueAvailability === 'Available' && q.isVisible)
-            .map(q => ({ id: q.id, name: q.name || q.description || String(q.id) }));
-        Utils.Debug.log('[AutoQueue]', `Loaded ${_availableQueues.length} queues:`, _availableQueues.map(q => `${q.name}(${q.id})`).join(', '));
+            .map(q => ({ id: q.id, name: q.name || q.description || String(q.id) }))
+            .sort((a, b) => a.id - b.id);
+        log(`Loaded ${_availableQueues.length} queues:`, _availableQueues.map(q => `${q.name}(${q.id})`).join(', '));
+        if (_onQueuesLoaded) _onQueuesLoaded();
     } catch (e) {
-        Utils.Debug.warn('[AutoQueue] Failed to load queues from Assets:', e);
+        Utils.Debug.warn('[AutoQueue] Failed to fetch queue list:', e);
     }
 }
 
@@ -40,7 +44,7 @@ async function fetchQueues() {
 
 async function reQueue() {
     if (_queuing) {
-        Utils.Debug.log('[AutoQueue]', 'reQueue() called but already queuing — skipped.');
+        log('reQueue() called but already queuing — skipped.');
         return;
     }
     _queuing = true;
@@ -49,16 +53,16 @@ async function reQueue() {
         const delay   = Utils.Store.get('autoQueue', 'delay') || 0;
         const enabled = Utils.Store.get('autoQueue', 'enabled');
 
-        Utils.Debug.log('[AutoQueue]', `reQueue() — enabled=${enabled}, queueId=${queueId}, delay=${delay}s`);
+        log(`reQueue() — enabled=${enabled}, queueId=${queueId}, delay=${delay}s`);
 
         if (!queueId) {
-            Utils.Debug.log('[AutoQueue]', 'No queue selected in settings — aborting re-queue.');
+            log('No queue selected in settings — aborting re-queue.');
             return;
         }
 
         const delayMs = delay * 1000;
         if (delayMs > 0) {
-            Utils.Debug.log('[AutoQueue]', `Waiting ${delay}s before re-queuing...`);
+            log(`Waiting ${delay}s before re-queuing...`);
             let isCancelled = false;
             const unregisterPanic = Utils.Panic.register(() => {
                 isCancelled = true;
@@ -67,44 +71,44 @@ async function reQueue() {
             unregisterPanic();
             
             if (isCancelled) {
-                Utils.Debug.log('[AutoQueue]', 'Cancelled via Panic Key - aborting.');
+                log('Cancelled via Panic Key - aborting.');
                 return;
             }
             if (!Utils.Store.get('autoQueue', 'enabled')) {
-                Utils.Debug.log('[AutoQueue]', 'Feature was disabled during delay - aborting.');
+                log('Feature was disabled during delay - aborting.');
                 return;
             }
         }
 
         // Play-again dismisses the EOG screen and returns us to a lobby.
         // Immediately overwrite the lobby with the chosen queue.
-        Utils.Debug.log('[AutoQueue]', 'POST /lol-lobby/v2/play-again');
+        log('POST /lol-lobby/v2/play-again');
         try {
             await Utils.LCU.post('/lol-lobby/v2/play-again');
-            Utils.Debug.log('[AutoQueue]', 'play-again accepted.');
+            log('play-again accepted.');
         } catch (e) {
-            Utils.Debug.log('[AutoQueue]', 'ERROR on play-again (may already be in lobby):', e?.message ?? e);
+            log('ERROR on play-again (may already be in lobby):', e?.message ?? e);
             // if we're already past EOG the endpoint will 404, continue anyway
         }
 
         // Small settle pause so the lobby is fully created before we mutate it
         await new Promise(r => setTimeout(r, 500));
 
-        Utils.Debug.log('[AutoQueue]', `POST /lol-lobby/v2/lobby  { queueId: ${queueId} }`);
+        log(`POST /lol-lobby/v2/lobby  { queueId: ${queueId} }`);
         try {
             const lobbyRes = await Utils.LCU.post('/lol-lobby/v2/lobby', { queueId: Number(queueId) });
-            Utils.Debug.log('[AutoQueue]', 'Lobby created:', JSON.stringify(lobbyRes)?.slice(0, 120));
+            log('Lobby created:', JSON.stringify(lobbyRes)?.slice(0, 120));
         } catch (e) {
-            Utils.Debug.log('[AutoQueue]', 'ERROR creating lobby:', e?.message ?? e);
+            log('ERROR creating lobby:', e?.message ?? e);
             return;
         }
 
-        Utils.Debug.log('[AutoQueue]', 'POST /lol-lobby/v2/lobby/matchmaking/search');
+        log('POST /lol-lobby/v2/lobby/matchmaking/search');
         try {
             await Utils.LCU.post('/lol-lobby/v2/lobby/matchmaking/search');
-            Utils.Debug.log('[AutoQueue]', 'Matchmaking search started — waiting for ready check.');
+            log('Matchmaking search started — waiting for ready check.');
         } catch (e) {
-            Utils.Debug.log('[AutoQueue]', 'ERROR starting matchmaking search:', e?.message ?? e);
+            log('ERROR starting matchmaking search:', e?.message ?? e);
         }
     } finally {
         _queuing = false;
@@ -148,10 +152,11 @@ function renderSettings(container) {
         _availableQueues.forEach(q => {
             const opt = document.createElement('option');
             opt.value = String(q.id);
-            opt.textContent = `${q.name} (${q.id})`;
+            opt.textContent = `${q.name} [${q.id}]`;
             if (String(q.id) === String(savedId)) opt.selected = true;
             queueSelect.appendChild(opt);
         });
+        // If nothing saved yet, save the first option as default
         if (!savedId && _availableQueues.length > 0) {
             Utils.Store.set('autoQueue', 'queueId', _availableQueues[0].id);
             queueSelect.value = String(_availableQueues[0].id);
@@ -159,6 +164,7 @@ function renderSettings(container) {
     }
 
     populateQueueSelect();
+    _onQueuesLoaded = populateQueueSelect;
 
     queueSelect.addEventListener('click', (e) => e.stopPropagation());
     queueSelect.addEventListener('change', (e) => {
@@ -214,7 +220,7 @@ function renderSettings(container) {
         lineHeight: '1.5'
     });
     tipBox.innerHTML = `<span style="color:#c8aa6e;font-weight:600;">Full Automation Guide:</span> For a completely hands-free journey from queue to game, make sure to also enable <b>Auto Accept</b>, <b>Auto Lock Champion</b>, and <b>Auto Honor</b> (with the <i>'Skip Honor'</i> option checked).`;
-
+    
     container.appendChild(tipBox);
 
     // Panic key lives in the Settings tab (shared with the menu shortcut); note it here
@@ -262,6 +268,7 @@ export function init(context) {
             ]
         });
     } else {
+        // Native settings UI injection
         Utils.DOM.observer.observe("lol-uikit-scrollable.auto-queue-settings", (plugin) => {
             plugin.appendChild(Utils.Settings.createToggleRow("Enable Auto Queue", isEnabled, (next) => {
                 isEnabled = next;
@@ -278,11 +285,11 @@ export function init(context) {
 }
 
 export async function load() {
-    Utils.Debug.log('[AutoQueue]', 'load() called — loading queues and subscribing to gameflow phase.');
+    log('load() called — fetching queues and subscribing to gameflow phase.');
     await fetchQueues();
 
     if (!Utils.LCU || !Utils.LCU.observe) {
-        Utils.Debug.log('[AutoQueue]', 'ERROR: Utils.LCU.observe not available — module inactive.');
+        log('ERROR: Utils.LCU.observe not available — module inactive.');
         return;
     }
 
@@ -290,30 +297,37 @@ export async function load() {
         const isEnabled = Utils.Store.get('autoQueue', 'enabled');
         if (!isEnabled) {
             _armed = false;
-            _queuing = false;
             return;
         }
 
         const phase = e.data;
-        Utils.Debug.log('[AutoQueue]', `Phase → "${phase}"  |  armed=${_armed}  queuing=${_queuing}  enabled=${isEnabled}`);
+        log(`Phase → "${phase}"  |  armed=${_armed}  queuing=${_queuing}  enabled=${isEnabled}`);
 
+        // Arm on early end-of-game phases
         if (phase === 'WaitingForStats' || phase === 'PreEndOfGame') {
-            if (!_armed) Utils.Debug.log('[AutoQueue]', `Arming on "${phase}".`);
+            if (!_armed) log(`Arming on "${phase}".`);
             _armed = true;
             return;
         }
 
+        // Fire on EndOfGame, but only if we actually saw an arming phase first -
+        // a stray/duplicate EndOfGame push (e.g. on plugin reload mid-postgame)
+        // shouldn't trigger a re-queue.
         if (phase === 'EndOfGame') {
-            if (!_armed) Utils.Debug.log('[AutoQueue]', 'Arming on "EndOfGame".');
-            _armed = true;
-            Utils.Debug.log('[AutoQueue]', '"EndOfGame" reached while armed — triggering re-queue.');
+            if (!_armed) {
+                log('"EndOfGame" reached without arming - ignoring.');
+                return;
+            }
+            log('"EndOfGame" reached while armed — triggering re-queue.');
             _armed = false;
             reQueue();
             return;
         }
 
-        if (_armed) Utils.Debug.log('[AutoQueue]', `Phase "${phase}" — disarming.`);
+        // Anything else: disarm. Don't touch _queuing here - reQueue()'s own
+        // finally block owns that guard, and reQueue() itself causes phase
+        // transitions (e.g. to "Lobby") while still in flight.
+        if (_armed) log(`Phase "${phase}" — disarming.`);
         _armed = false;
-        _queuing = false;
     });
 }

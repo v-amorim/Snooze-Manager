@@ -19,14 +19,21 @@ function toggleFeature(enabled) {
 
 async function dodgeQueue() {
     const endpoint = '/lol-login/v1/session/invoke?destination=lcdsServiceProxy&method=call&args=["","teambuilder-draft","quitV2",""]';
-    for (let i = 0; i < 10; i++) {
+    const MAX_ATTEMPTS = 10;
+    const BASE_DELAY_MS = 250;
+    const MAX_DELAY_MS = 4000;
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
         try {
             await Utils.LCU.post(endpoint, '["","teambuilder-draft","quitV2",""]', { raw: true });
             Utils.Debug.log(`[DodgeButton] quitV2 attempt ${i + 1} sent`);
+            break;
         } catch (err) {
             Utils.Debug.error(`[DodgeButton] quitV2 attempt ${i + 1} failed:`, err);
         }
-        await new Promise(resolve => setTimeout(resolve, 250));
+        if (i < MAX_ATTEMPTS - 1) {
+            const delay = Math.min(BASE_DELAY_MS * Math.pow(2, i), MAX_DELAY_MS);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
     }
     try {
         await Utils.LCU.post('/lol-lobby/v1/lobby/custom/cancel-champ-select', null);

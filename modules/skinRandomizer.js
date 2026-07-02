@@ -2,136 +2,24 @@
  * @name Snooze-SkinRandomizer
  * @version 1.0.0
  * @author SnoozeFest - github@ReformedDoge
- * @description Randomizes your skin in champion select and marks owned skins/chromas on the carousel dots.
+ * @description Adds a "Random Skin" button to the champion select skin carousel (rolls an owned skin, with a chance for an owned chroma) and marks owned skins/chromas on the carousel dots.
  * @link https://github.com/ReformedDoge
  */
 import Utils from './generalUtils.js';
 
 // The carousel renders one navigation pip (.skin-selection-indicator-selector)
-// per skin, in the same order as /lol-champ-select/v1/skin-carousel-skins, so
-// we map pip index -> fetched skin and fade-fill the dot for owned skins.
+// per skin, in the same order as the component's own carouselSkins, so we map
+// pip index -> skin and fade-fill the dot for owned skins.
 const PIP_SELECTOR =
   '.skin-selection-indicator-list .skin-selection-indicator-selector';
-
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const REROLL_BTN_CLASS = 'skin-randomizer-reroll';
 
 let randomizeEnabled = false;
 let indicatorsEnabled = false;
 
-let availableSkinsArray = [];
-let lastSelectedSkinId = null;
-let skinThumbnailObserver = null;
-
-let carouselSkinsOwnership = [];
-let carouselSkinsChroma = [];
-let carouselWasPresent = false;
-let carouselLoadInFlight = false;
-let indicatorUpdateScheduled = false;
-let autoRolled = false;
-let bodyObserver = null;
-let lastPipCount = 0;
-
-// fetch all carousel skins for the currently selected champion
-async function getChampionSkins() {
-  return Utils.LCU.get('/lol-champ-select/v1/skin-carousel-skins');
-}
-
-// Whale Helper's "Hide Unowned Skins" filters the rendered carousel via its
-// handleSkinCarouselSkins wrap, so the pips become an owned-only subset. Mirror
-// that exact predicate here so our fetched list matches the rendered pips in
-// both length and order, keeping the pip-index -> skin mapping correct.
-function filterForHideUnowned(skins) {
-  if (Utils.Store.get('whaleHelper', 'hideUnownedEnabled') !== true) return skins;
-  return skins.filter(
-    (skin) => !(!skin.unlocked && !skin.isBase && (!skin.id || skin.id % 1000 !== 0))
-  );
-}
-
-// keep only unlocked skins/chromas for the randomizer to choose from
-function manageSkinsArray(skinsArray) {
-  availableSkinsArray = skinsArray
-    .filter((s) => s.unlocked)
-    .map((s) => ({
-      skinId: s.id,
-      chromas: s.childSkins.filter((c) => c.unlocked),
-    }));
-}
-
-// pick a random unlocked skin, avoiding an immediate repeat
-function getRandomSkin() {
-  if (availableSkinsArray.length === 1) return availableSkinsArray[0];
-
-  let randomSkin;
-  do {
-    randomSkin =
-      availableSkinsArray[
-        Math.floor(Math.random() * availableSkinsArray.length)
-      ];
-  } while (randomSkin.skinId === lastSelectedSkinId);
-  return randomSkin;
-}
-
-// randomize a skin/chroma and apply it to the current selection
-async function pickRandomSkin() {
-  if (!availableSkinsArray.length) return;
-
-  const randomSkin = getRandomSkin();
-  lastSelectedSkinId = randomSkin.skinId;
-
-  const options = [...randomSkin.chromas.map((c) => c.id), randomSkin.skinId];
-  const selectedSkinId = options[Math.floor(Math.random() * options.length)];
-
-  try {
-    await Utils.LCU.patch('/lol-champ-select/v1/session/my-selection', {
-      selectedSkinId,
-    });
-  } catch (err) {
-    Utils.Debug.warn('[SkinRandomizer] Failed to apply skin:', err);
-  }
-
-  makeSkinThumbnailClickable();
-}
-
-// keep click-to-reroll on the centered skin thumbnail (bonus alongside the button)
-function makeSkinThumbnailClickable() {
-  const selectedLi = document.querySelector('li.skin-carousel-offset-2');
-  if (!selectedLi) return;
-
-  const apply = () => {
-    const thumbnail = selectedLi.querySelector('.skin-selection-thumbnail');
-    if (!thumbnail || thumbnail.dataset.randomizable) return;
-
-    thumbnail.addEventListener('click', () => pickRandomSkin());
-    thumbnail.title = 'Click me to randomize a skin!';
-    thumbnail.dataset.randomizable = 'true';
-  };
-
-  apply();
-
-  if (skinThumbnailObserver) skinThumbnailObserver.disconnect();
-  skinThumbnailObserver = new MutationObserver(apply);
-  skinThumbnailObserver.observe(selectedLi, { childList: true, subtree: true });
-}
-
-// add the "Random Skin" button below the carousel (idempotent)
-function ensureRerollButton() {
-  if (document.getElementById('skin-randomizer-reroll')) return;
-  const container = document.querySelector('.skin-selection-carousel-container');
-  if (!container) return;
-
-  const btn = document.createElement('div');
-  btn.id = 'skin-randomizer-reroll';
-  btn.className = 'skin-randomizer-reroll';
-  btn.setAttribute('role', 'button');
-  btn.innerHTML = '<span class="skin-randomizer-reroll-icon">🎲</span> Random Skin';
-  btn.addEventListener('click', () => pickRandomSkin());
-  container.appendChild(btn);
-}
-
-function removeRerollButton() {
-  const btn = document.getElementById('skin-randomizer-reroll');
-  if (btn) btn.remove();
-}
+// skin-select component instances currently mounted, so a settings toggle can
+// take effect immediately instead of waiting for the next natural re-render.
+const activeComponents = new Set();
 
 function isSkinOwned(skin) {
   return !!(skin && (skin.unlocked || (skin.ownership && skin.ownership.owned)));
@@ -141,146 +29,117 @@ function hasOwnedChroma(skin) {
   return !!(
     skin &&
     Array.isArray(skin.childSkins) &&
-    skin.childSkins.some((c) => c.unlocked)
+    skin.childSkins.some((c) => c.unlocked || c.ownership?.owned)
   );
 }
 
-// build both pip maps (ownership + owned-chroma) from the carousel skins
-function setOwnershipData(skins) {
-  carouselSkinsOwnership = skins.map(isSkinOwned);
-  carouselSkinsChroma = skins.map((s) => isSkinOwned(s) && hasOwnedChroma(s));
+// pick a random owned skin variant (excluding only the currently
+// viewed/selected one - the base skin is a valid roll outcome too) then apply
+// it through the component's own setter so Ember's state/observers stay
+// correct.
+function rerollSkin(component) {
+  const skins = component.carouselSkins;
+  if (!Array.isArray(skins) || skins.length < 2) return;
+
+  const owned = skins.filter((s) => isSkinOwned(s));
+  if (owned.length < 2) return;
+
+  const currentId = component.get?.('viewSkin.id') ?? component.get?.('selectedSkinId');
+  const pool = currentId ? owned.filter((s) => s.id !== currentId) : owned;
+  if (!pool.length) return;
+
+  // Pick the skin first with even odds across owned skins, then separately
+  // roll whether to apply one of its owned chromas - keeps a skin with many
+  // chromas from crowding out skins that have none.
+  let pick = pool[Math.floor(Math.random() * pool.length)];
+  if (Array.isArray(pick.childSkins) && pick.childSkins.length) {
+    const ownedChromas = pick.childSkins.filter((c) => c.unlocked || c.ownership?.owned);
+    if (ownedChromas.length) {
+      const chromaOptions = [null, ...ownedChromas];
+      const chromaPick = chromaOptions[Math.floor(Math.random() * chromaOptions.length)];
+      if (chromaPick) pick = chromaPick;
+    }
+  }
+
+  try {
+    if (typeof component.setSkin === 'function') {
+      component.setSkin(pick);
+    } else if (typeof component.setViewSkin === 'function') {
+      component.setViewSkin(pick);
+    }
+  } catch (err) {
+    Utils.Debug.warn('[SkinRandomizer] Failed to apply skin:', err);
+  }
 }
 
-// fade-fill the dot of every owned skin; pips re-render on scroll/selection,
-// so this reapplies the class each time it runs
-function paintOwnedPips() {
-  const pips = document.querySelectorAll(PIP_SELECTOR);
-  // Bail if the pip set no longer matches our loaded data (e.g. hide-unowned
-  // toggled or champion swapped) so we never paint against a stale mapping;
-  // scheduleCarouselUpdate reloads on the pip-count change.
-  if (pips.length !== carouselSkinsOwnership.length) return;
+// add the dice button to the skin-select component root (idempotent, safe to call every render)
+function ensureRerollButton(component) {
+  if (!component.element || component.element.querySelector(`.${REROLL_BTN_CLASS}`)) return;
+
+  const btn = document.createElement('div');
+  btn.className = REROLL_BTN_CLASS;
+  btn.setAttribute('role', 'button');
+  btn.title = 'Random Skin';
+  btn.innerHTML =
+    '<img class="skin-randomizer-reroll-icon" src="/fe/lol-static-assets/svg/bad_luck_protection_dice.svg" alt="">';
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    rerollSkin(component);
+  });
+  component.element.appendChild(btn);
+}
+
+function removeRerollButton(component) {
+  component.element?.querySelectorAll(`.${REROLL_BTN_CLASS}`).forEach((el) => el.remove());
+}
+
+// fade-fill the dot of every owned skin; re-applied every render since pips
+// get re-created on scroll/selection
+function paintOwnedPips(component) {
+  const skins = component.carouselSkins;
+  if (!component.element || !Array.isArray(skins)) return;
+
+  const pips = component.element.querySelectorAll(PIP_SELECTOR);
+  // Bail if the pip set doesn't match carouselSkins yet (mid-render); the next
+  // didRender call will retry once they're in sync.
+  if (pips.length !== skins.length) return;
+
   pips.forEach((pip, i) => {
-    pip.classList.toggle('owned-skin-pip', !!carouselSkinsOwnership[i]);
-    pip.classList.toggle('owned-chroma-pip', !!carouselSkinsChroma[i]);
+    const skin = skins[i];
+    pip.classList.toggle('owned-skin-pip', isSkinOwned(skin));
+    pip.classList.toggle('owned-chroma-pip', isSkinOwned(skin) && hasOwnedChroma(skin));
   });
 }
 
-function clearPips() {
-  document.querySelectorAll(PIP_SELECTOR).forEach((pip) => {
+function clearPips(component) {
+  component.element?.querySelectorAll(PIP_SELECTOR).forEach((pip) => {
     pip.classList.remove('owned-skin-pip', 'owned-chroma-pip');
   });
 }
 
-// load the skins for the champion on screen (retry until the response length
-// matches the rendered pips, so it is the right champion), then wire up the
-// dots and button per the enabled toggles. Returns true once data is loaded.
-async function refreshCarousel(attempts = 12) {
-  if (carouselLoadInFlight) return false;
-  carouselLoadInFlight = true;
-  try {
-    for (let i = 0; i < attempts; i++) {
-      const pipCount = document.querySelectorAll(PIP_SELECTOR).length;
-      if (!pipCount) return false; // carousel gone
-
-      let skins = null;
-      try {
-        skins = await getChampionSkins();
-      } catch (e) {
-        // not ready yet, retry
-      }
-
-      if (Array.isArray(skins)) skins = filterForHideUnowned(skins);
-
-      if (Array.isArray(skins) && skins.length === pipCount) {
-        manageSkinsArray(skins);
-        setOwnershipData(skins);
-        if (indicatorsEnabled) paintOwnedPips();
-        if (randomizeEnabled) ensureRerollButton();
-        return true;
-      }
-      await delay(150);
-    }
-    return false;
-  } finally {
-    carouselLoadInFlight = false;
-  }
+// applies the current toggle state to one mounted skin-select instance
+function applyToComponent(component) {
+  if (!component.element) return;
+  if (randomizeEnabled) ensureRerollButton(component);
+  else removeRerollButton(component);
+  if (indicatorsEnabled) paintOwnedPips(component);
+  else clearPips(component);
 }
 
-// react to the carousel mounting/unmounting, at most once per frame
-function scheduleCarouselUpdate() {
-  if (indicatorUpdateScheduled) return;
-  indicatorUpdateScheduled = true;
-  requestAnimationFrame(() => {
-    indicatorUpdateScheduled = false;
-
-    const pipCount = document.querySelectorAll(PIP_SELECTOR).length;
-
-    if (pipCount === 0) {
-      // left champ select: drop everything so nothing carries over
-      if (carouselWasPresent) {
-        carouselWasPresent = false;
-        lastPipCount = 0;
-        autoRolled = false;
-        carouselSkinsOwnership = [];
-        carouselSkinsChroma = [];
-        availableSkinsArray = [];
-        removeRerollButton();
-        if (skinThumbnailObserver) {
-          skinThumbnailObserver.disconnect();
-          skinThumbnailObserver = null;
-        }
-      }
-      return;
-    }
-
-    carouselWasPresent = true;
-
-    // (Re)load whenever the pip set changes - entering champ select, a champion
-    // swap, or hide-unowned being toggled - so our pip-index -> skin mapping is
-    // rebuilt against the currently rendered pips before we paint or roll.
-    if ((randomizeEnabled || indicatorsEnabled) && pipCount !== lastPipCount) {
-      lastPipCount = pipCount;
-      refreshCarousel().then((ok) => {
-        if (ok && randomizeEnabled && !autoRolled) {
-          autoRolled = true;
-          pickRandomSkin(); // auto-roll on entering champ select
-        }
-      });
-    }
-
-    if (randomizeEnabled) ensureRerollButton(); // keep the button alive across re-renders
-    if (indicatorsEnabled) paintOwnedPips();
-  });
-}
-
-// forcing lastPipCount stale makes the next update reload + apply the feature
-function forceResync() {
-  lastPipCount = -1;
-  scheduleCarouselUpdate();
+function refreshActiveComponents() {
+  activeComponents.forEach(applyToComponent);
 }
 
 function setRandomizeEnabled(enabled) {
   randomizeEnabled = enabled;
   Utils.Store.set('skinRandomizer', 'autoRandomize', enabled);
-  if (!enabled) {
-    removeRerollButton();
-    if (skinThumbnailObserver) {
-      skinThumbnailObserver.disconnect();
-      skinThumbnailObserver = null;
-    }
-  } else {
-    forceResync();
-  }
+  refreshActiveComponents();
 }
 
 function setIndicatorsEnabled(enabled) {
   indicatorsEnabled = enabled;
   Utils.Store.set('skinRandomizer', 'indicators', enabled);
-  if (!enabled) {
-    clearPips();
-  } else {
-    forceResync();
-  }
+  refreshActiveComponents();
 }
 
 function injectStyles() {
@@ -288,43 +147,46 @@ function injectStyles() {
   const style = document.createElement('style');
   style.id = 'skin-randomizer-styles';
   style.textContent = `
-    .skin-selection-carousel-container {
+    .skin-select {
       position: relative;
     }
     .skin-randomizer-reroll {
       position: absolute;
-      left: 50%;
-      top: 100%;
-      transform: translate(-50%, 18px);
+      top: 8px;
+      right: 8px;
       z-index: 5;
-      display: inline-flex;
+      display: flex;
       align-items: center;
-      gap: 4px;
-      padding: 3px 10px;
-      font-size: 9px;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      white-space: nowrap;
-      font-family: var(--font-display), "Beaufort for LOL", serif;
-      color: #cdbe91;
-      background: linear-gradient(180deg, #1e2328, #010a13);
-      border: 1px solid transparent;
-      border-image: linear-gradient(180deg, #c8aa6e, #785a28) 1;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.6);
+      border: 1px solid rgba(200, 170, 110, 0.3);
       cursor: pointer;
       user-select: none;
-      transition: color 0.15s, border-image 0.15s;
+      padding: 4px;
+      flex-shrink: 0;
+      transition: all 0.2s;
     }
     .skin-randomizer-reroll:hover {
-      color: #f0e6d2;
-      border-image: linear-gradient(180deg, #f0e6d2, #c8aa6e) 1;
+      background: rgba(200, 170, 110, 0.2);
+      border-color: #c8aa6e;
+      transform: scale(1.1);
     }
     .skin-randomizer-reroll:active {
-      color: #fff;
-      background: linear-gradient(180deg, #010a13, #1e2328);
+      background: rgba(0, 0, 0, 0.8);
     }
     .skin-randomizer-reroll-icon {
-      font-size: 11px;
+      width: 12px;
+      height: 12px;
+      opacity: 0.8;
+      filter: invert(66%) sepia(9%) saturate(415%) hue-rotate(3deg) brightness(93%) contrast(88%);
+      transition: opacity 0.2s;
+      display: block;
+    }
+    .skin-randomizer-reroll:hover .skin-randomizer-reroll-icon {
+      opacity: 1;
     }
 
     .skin-selection-indicator-list .skin-selection-indicator-selector.owned-skin-pip {
@@ -365,7 +227,40 @@ function injectStyles() {
   document.head.appendChild(style);
 }
 
+export function installEmberHook() {
+  Utils.Hooks.Ember.registerRule({
+    name: 'skin-randomizer-hook',
+    matcher: 'skin-select',
+    mixin() {
+      return {
+        didInsertElement() {
+          this._super(...arguments);
+          activeComponents.add(this);
+        },
+        didRender() {
+          this._super(...arguments);
+          applyToComponent(this);
+        },
+        willDestroyElement() {
+          activeComponents.delete(this);
+          removeRerollButton(this);
+          this._super(...arguments);
+        }
+      };
+    }
+  });
+}
+
 export function init(context) {
+  Utils.Settings.inject(context, {
+    name: 'skin-randomizer-settings',
+    titleKey: 'snooze_skin-randomizer',
+    titleName: 'Skin Randomizer',
+    capitalTitleKey: 'snooze_skin-randomizer_capital',
+    capitalTitleName: 'SKIN RANDOMIZER',
+    class: 'skin-randomizer-settings',
+  });
+
   randomizeEnabled = Utils.Store.get('skinRandomizer', 'autoRandomize') || false;
   indicatorsEnabled = Utils.Store.get('skinRandomizer', 'indicators') || false;
 
@@ -374,13 +269,13 @@ export function init(context) {
       id: 'skinRandomizer',
       name: 'Skin Randomizer',
       description:
-        'Randomizes your skin in champion select and marks which skins you own (and which have chromas) on the carousel dots.',
+        'Adds a "Random Skin" dice button to the champion select carousel and marks which skins you own (and which have chromas) on the carousel dots.',
       settings: [
         {
           type: 'toggle',
           id: 'sm:skinRandomizerAuto',
-          label: 'Auto-randomize skin',
-          description: 'Rolls a random owned skin on entering champ select; adds a "Random Skin" button and lets you click the skin thumbnail to reroll any time',
+          label: 'Enable random skin button',
+          description: 'Adds a dice button to the skin carousel; click it to roll a random owned skin, with a chance to roll one of its owned chromas',
           value: randomizeEnabled,
           onChange: (val) => setRandomizeEnabled(val),
         },
@@ -394,12 +289,18 @@ export function init(context) {
         },
       ],
     });
+  } else {
+    Utils.DOM.observer.observe('lol-uikit-scrollable.skin-randomizer-settings', (plugin) => {
+      plugin.appendChild(Utils.Settings.createToggleRow('Enable random skin button', randomizeEnabled, (next) => {
+        setRandomizeEnabled(next);
+      }));
+      plugin.appendChild(Utils.Settings.createToggleRow('Show owned & chroma indicators', indicatorsEnabled, (next) => {
+        setIndicatorsEnabled(next);
+      }));
+    });
   }
 }
 
 export function load() {
   injectStyles();
-  if (bodyObserver) return;
-  bodyObserver = new MutationObserver(scheduleCarouselUpdate);
-  bodyObserver.observe(document.body, { childList: true, subtree: true });
 }

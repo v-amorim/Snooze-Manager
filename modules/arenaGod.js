@@ -10,7 +10,7 @@ const SETTINGS_KEY = 'enabled';
 const POS_KEY = 'pos';
 const PLAYED_ID = '602001';
 const FIRST_ID = '602002';
-const ARENA_QUEUES = [1700, 1710, 1720];
+const ARENA_QUEUES = [1700, 1701, 1704, 1710, 1720, 1731, 1732, 1740, 1750];
 
 let isEnabled = false;
 let currentArenaMode = false;
@@ -261,9 +261,7 @@ export function init(context) {
         Utils.DOM.observer.observe('lol-uikit-scrollable.arena-god-settings', (plugin) => {
             plugin.innerHTML = '';
             plugin.appendChild(Utils.Settings.createToggleRow('Enable Arena God Tracker', isEnabled, (next) => {
-                isEnabled = next;
-                Utils.Store.set('arenaGod', SETTINGS_KEY, isEnabled);
-                toggleFeature(isEnabled);
+                toggleFeature(next);
             }));
         });
     }

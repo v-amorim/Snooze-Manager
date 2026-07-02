@@ -401,8 +401,9 @@ function completePendingActions() {
     if (myActions.length === 0) return;
     const lockBeforeEndMs = getLockBeforeEndMs();
     if (lockBeforeEndMs <= 0) return;
+    const myPosition = resolveMyPosition(s);
     for (const action of myActions) {
-        const champId = chooseChampionForAction(s, action, 'unknown');
+        const champId = chooseChampionForAction(s, action, myPosition);
         if (!champId) continue;
         const shouldComplete = shouldCompleteAction(s, action, true, true, lockBeforeEndMs);
         if (!shouldComplete) continue;
@@ -520,8 +521,28 @@ export function init(context) {
     }
 }
 
+function resolveMyPosition(s) {
+    let myPosition = 'default';
+    if (s.myTeam) {
+        const me = s.myTeam.find(p =>
+            (currentPuuid && p.puuid === currentPuuid) ||
+            (currentSummonerId && p.summonerId === currentSummonerId) ||
+            (p.cellId === s.localPlayerCellId)
+        );
+        if (me && me.assignedPosition) {
+            myPosition = me.assignedPosition;
+        }
+    }
+    return myPosition || 'default';
+}
+
 async function processChampSelectSession(s) {
     if (!isEnabled || !s) return;
+
+    // Utils.Panic clears every registered callback (from any module) on a single
+    // press, so re-arm here rather than only once at mount - otherwise pressing
+    // panic for an unrelated auto-action permanently drops auto-lock's hook.
+    unregisterPanic = Utils.Panic.register(panic);
 
     if (panicActive) {
         if (lastSessionData && s.gameId === lastSessionData.gameId) return;
@@ -535,19 +556,7 @@ async function processChampSelectSession(s) {
 
     fetchCurrentSummoner();
 
-    let myPosition = 'default';
-    if (s.myTeam) {
-        const me = s.myTeam.find(p => 
-            (currentPuuid && p.puuid === currentPuuid) || 
-            (currentSummonerId && p.summonerId === currentSummonerId) ||
-            (p.cellId === s.localPlayerCellId)
-        );
-        if (me && me.assignedPosition) {
-            myPosition = me.assignedPosition;
-        }
-    }
-    
-    if (!myPosition) myPosition = 'default';
+    const myPosition = resolveMyPosition(s);
 
     const allActions = s.actions ? s.actions.flat(2) : [];
     logBanSessionState(s, allActions, myPosition);
@@ -597,25 +606,21 @@ async function processChampSelectSession(s) {
       };
 
       try {
-          if (action.type === 'ban') {
-              Utils.Debug.log('[AutoSelect] ban patch', {
-                  actionId: action.id,
-                  phase: getChampSelectPhase(s),
-                  isInProgress: !!action.isInProgress,
-                  payload
-              });
-          }
+          Utils.Debug.log(`[AutoSelect] ${action.type} patch`, {
+              actionId: action.id,
+              phase: getChampSelectPhase(s),
+              isInProgress: !!action.isInProgress,
+              payload
+          });
 
           await Utils.LCU.patch(`/lol-champ-select/v1/session/actions/${action.id}`, payload);
       } catch (err) {
-          if (action.type === 'ban') {
-              Utils.Debug.warn('[AutoSelect] ban patch failed', {
-                  actionId: action.id,
-                  phase: getChampSelectPhase(s),
-                  payload,
-                  err
-              });
-          }
+          Utils.Debug.warn(`[AutoSelect] ${action.type} patch failed`, {
+              actionId: action.id,
+              phase: getChampSelectPhase(s),
+              payload,
+              err
+          });
       }
     }
 }
@@ -625,7 +630,11 @@ function getChampSelectPhase(session) {
 }
 
 function shouldCompleteAction(session, action, instantPick, instantBan, lockBeforeEndMs) {
-    if (!action.isInProgress) return false;
+    // Arena's freeform pick window has no per-player turn order, so picks never
+    // go isInProgress — mirror the same PLANNING carve-out the caller's
+    // eligibility filter uses, or these actions could hover but never lock in.
+    const isEligible = action.isInProgress || (action.type === 'pick' && getChampSelectPhase(session) === 'PLANNING');
+    if (!isEligible) return false;
 
     if (lockBeforeEndMs > 0) {
         let timerSrc = 'none';
@@ -649,8 +658,11 @@ function shouldCompleteAction(session, action, instantPick, instantBan, lockBefo
 
         if (timeRemaining !== null) {
             const shouldComplete = timeRemaining <= lockBeforeEndMs;
-            if (shouldComplete && action.type === 'ban' && getChampSelectPhase(session) !== 'BAN_PICK') {
-                return false;
+            // Classic Draft/Ranked report the ban window as 'BAN_PICK'; Arena's
+            // single-phase flow reports the same window as 'PLANNING'.
+            if (shouldComplete && action.type === 'ban') {
+                const phase = getChampSelectPhase(session);
+                if (phase !== 'BAN_PICK' && phase !== 'PLANNING') return false;
             }
             Utils.Debug.log(`[AutoSelect] lockBeforeEnd: timer=${timeRemaining}ms, threshold=${lockBeforeEndMs}ms, complete=${shouldComplete}, src=${timerSrc}`);
             return shouldComplete;
@@ -659,7 +671,7 @@ function shouldCompleteAction(session, action, instantPick, instantBan, lockBefo
     }
 
     const phase = getChampSelectPhase(session);
-    if (action.type === 'ban') return instantBan && phase === 'BAN_PICK';
+    if (action.type === 'ban') return instantBan && (phase === 'BAN_PICK' || phase === 'PLANNING');
     if (action.type === 'pick') return instantPick;
 
     return false;

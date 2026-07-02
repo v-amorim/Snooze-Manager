@@ -387,9 +387,7 @@ export function init(context) {
         Utils.DOM.observer.observe("lol-uikit-scrollable.balance-tooltip-settings", (plugin) => {
             plugin.innerHTML = '';
             plugin.appendChild(Utils.Settings.createToggleRow("Enable Balance Tooltip", isEnabled, (next) => {
-                isEnabled = next;
-                Utils.Store.set('SnoozeBalanceTooltip', 'enabled', isEnabled);
-                toggleFeature(isEnabled);
+                toggleFeature(next);
             }));
         });
     }

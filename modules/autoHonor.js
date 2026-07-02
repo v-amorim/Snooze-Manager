@@ -15,10 +15,6 @@ function toggleFeature(enabled) {
     Utils.Store.set('autoHonor', 'enabled', enabled);
 }
 
-function getDelay() {
-    return Utils.Store.get('autoHonor', 'delayMs') || 200;
-}
-
 function renderExtraSettings(container) {
     container.style.display = 'flex';
     container.style.flexDirection = 'column';
@@ -106,53 +102,53 @@ export function init(context) {
     }
 }
 
+/**
+ * If the ballot is not immediately ready, we register a WebSocket observer and resolve & unsubscribe the moment the LCU populates it.
+ */
 function getValidBallot() {
     return new Promise(async (resolve) => {
-        let ballot = await Utils.LCU.get('/lol-honor-v2/v1/ballot').catch(() => null);
-        if (ballot?.eligibleAllies?.length || ballot?.eligibleOpponents?.length) {
-            Utils.Debug.log('[AutoHonor] Ballot already loaded and valid.');
+        let settled = false;
+        let disconnect = null;
+        const isValid = (b) => !!(b && (b.eligibleAllies?.length || b.eligibleOpponents?.length));
+        const finish = (ballot) => {
+            if (settled) return;
+            settled = true;
+            if (disconnect) disconnect();
             resolve(ballot);
+        };
+
+        const initialBallot = await Utils.LCU.get('/lol-honor-v2/v1/ballot').catch(() => null);
+        if (isValid(initialBallot)) {
+            Utils.Debug.log('[AutoHonor] Ballot already loaded and valid.');
+            finish(initialBallot);
             return;
         }
 
-        Utils.Debug.log('[AutoHonor] Ballot not ready. Refreshing and subscribing to WebSocket...');
-        await Utils.LCU.post('/lol-honor-v2/v1/ballot/refresh').catch(() => {});
-
-        let resolved = false;
-        const disconnect = Utils.LCU.observe('/lol-honor-v2/v1/ballot', (event) => {
-            if (event.data?.eligibleAllies?.length || event.data?.eligibleOpponents?.length) {
+        Utils.Debug.log('[AutoHonor] Ballot not ready yet. Subscribing to LCU WebSocket...');
+        disconnect = Utils.LCU.observe('/lol-honor-v2/v1/ballot', (event) => {
+            if (isValid(event.data)) {
                 Utils.Debug.log('[AutoHonor] Socket event received: Ballot populated.');
-                resolved = true;
-                disconnect();
-                resolve(event.data);
+                finish(event.data);
             }
         });
 
-        ballot = await Utils.LCU.get('/lol-honor-v2/v1/ballot').catch(() => null);
-        if (!resolved && (ballot?.eligibleAllies?.length || ballot?.eligibleOpponents?.length)) {
-            Utils.Debug.log('[AutoHonor] Ballot populated (re-checked after subscribe).');
-            resolved = true;
-            disconnect();
-            resolve(ballot);
+        // Re-check once after subscribing: the ballot can populate in the gap between
+        // the initial GET returning empty and the observer attaching, which would
+        // otherwise leave this promise waiting for an event that already fired.
+        const recheck = await Utils.LCU.get('/lol-honor-v2/v1/ballot').catch(() => null);
+        if (isValid(recheck)) {
+            Utils.Debug.log('[AutoHonor] Ballot populated during subscribe window (re-check).');
+            finish(recheck);
+            return;
         }
 
-        await new Promise(r => setTimeout(r, 5000));
-        if (!resolved) {
-            Utils.Debug.log('[AutoHonor] Ballot timed out after 5s. Resolving with current state.');
-            disconnect();
-            resolve(ballot);
-        }
+        // Fallback so the honor sequence never hangs forever if no event arrives.
+        setTimeout(() => {
+            if (settled) return;
+            Utils.Debug.warn('[AutoHonor] Ballot wait timed out; resolving with last known ballot.');
+            finish(recheck || initialBallot);
+        }, 5000);
     });
-}
-
-async function triggerAutoHonorIfReady() {
-    const currentEnabled = Utils.Store.get('autoHonor', 'enabled');
-    if (!currentEnabled) return;
-    if (honorAttemptedForCurrentGame) return;
-
-    honorAttemptedForCurrentGame = true;
-    Utils.Debug.info('[AutoHonor] Postgame UI rendered. Starting honor sequence.');
-    autoHonorTeammate();
 }
 
 async function autoHonorTeammate() {
@@ -166,27 +162,20 @@ async function autoHonorTeammate() {
         return;
     }
 
-    Utils.Debug.log('[AutoHonor] Starting auto-honor sequence...');
+    Utils.Debug.log('[AutoHonor] Commencing auto-honor sequence...');
+
+    let cancelled = false;
+    const unregisterPanic = Utils.Panic.register(() => {
+        cancelled = true;
+        Utils.Debug.log('[AutoHonor] Panic triggered — aborting honor sequence.');
+    });
 
     try {
         const skip = Utils.Store.get('autoHonor', 'skip') || false;
 
+        // Wait for the LCU to populate the ballot
         const ballot = await getValidBallot();
-        if (!ballot) {
-            Utils.Debug.warn('[AutoHonor] No ballot returned. Aborting.');
-            return;
-        }
-
-        Utils.Debug.log('[AutoHonor] Ballot state:', {
-            gameId: ballot.gameId,
-            allies: ballot.eligibleAllies?.length || 0,
-            opponents: ballot.eligibleOpponents?.length || 0,
-            votes: ballot.votePool?.votes || 0
-        });
-        Utils.Debug.log('[AutoHonor] Eligible allies:', ballot.eligibleAllies?.map(p => ({ name: p.summonerName || p.gameName || p.puuid, puuid: p.puuid })));
-        Utils.Debug.log('[AutoHonor] Eligible opponents:', ballot.eligibleOpponents?.map(p => ({ name: p.summonerName || p.gameName || p.puuid, puuid: p.puuid })));
-
-        let didVote = false;
+        if (!ballot || cancelled) return;
 
         if (skip) {
             Utils.Debug.info('[AutoHonor] Skip Honor is active. Requesting direct skip via LCU...');
@@ -196,79 +185,99 @@ async function autoHonorTeammate() {
             }).catch(err => {
                 Utils.Debug.error('[AutoHonor] Skip request rejected by LCU:', err);
             });
-            didVote = true;
         } else {
+            // Pick candidates
             const mode = Utils.Store.get('autoHonor', 'mode') || 'allies';
             let candidates = [];
-
+            
             if (mode === 'allies') candidates = ballot.eligibleAllies || [];
             else if (mode === 'enemies') candidates = ballot.eligibleOpponents || [];
             else if (mode === 'random') candidates = [...(ballot.eligibleAllies || []), ...(ballot.eligibleOpponents || [])];
-
+            
             const voteCount = ballot.votePool?.votes || 1;
-            Utils.Debug.log(`[AutoHonor] Target mode: "${mode}", matches: ${candidates.length}, votes: ${voteCount}`);
+            Utils.Debug.log(`[AutoHonor] Target mode is set to: "${mode}". Total matches found: ${candidates.length}. Actionable votes: ${voteCount}`);
 
-            if (candidates?.length > 0) {
+            if (candidates && candidates.length > 0) {
+                // Shuffle candidates
                 const shuffled = [...candidates].sort(() => 0.5 - Math.random());
+                const totalVotes = Math.min(voteCount, shuffled.length);
 
-                for (let i = 0; i < Math.min(voteCount, shuffled.length); i++) {
+                // Cast votes sequentially. Multi-vote ballots (voteCount > 1) share a
+                // single ballot version, so firing the POSTs in parallel can have the
+                // LCU reject/ignore votes cast against a stale version. A small gap
+                // between votes lets each one commit before the next.
+                for (let i = 0; i < totalVotes; i++) {
+                    if (cancelled) {
+                        Utils.Debug.log('[AutoHonor] Vote loop aborted via Panic Key.');
+                        return;
+                    }
+
                     const target = shuffled[i];
                     const targetName = target.summonerName || target.gameName || target.puuid;
 
-                    Utils.Debug.info(`[AutoHonor] [Vote ${i + 1}/${voteCount}] Staging HEART vote for: ${targetName}`);
+                    Utils.Debug.info(`[AutoHonor] [Vote ${i + 1}/${totalVotes}] Casting HEART vote for: ${targetName}`);
 
-                    await Utils.LCU.post('/lol-honor/v1/honor', {
-                        honorType: 'HEART',
-                        recipientPuuid: target.puuid
-                    }).then(() => {
-                        Utils.Debug.log(`[AutoHonor] Successfully staged vote for: ${targetName}`);
-                    }).catch(err => {
-                        Utils.Debug.error(`[AutoHonor] Vote staging failed for: ${targetName}`, err);
-                    });
+                    try {
+                        await Utils.LCU.post('/lol-honor/v1/honor', {
+                            honorType: 'HEART',
+                            recipientPuuid: target.puuid
+                        });
+                        Utils.Debug.log(`[AutoHonor] Successfully cast vote for: ${targetName}`);
+                    } catch (err) {
+                        Utils.Debug.error(`[AutoHonor] Vote failed for: ${targetName}`, err);
+                    }
 
-                    await new Promise(r => setTimeout(r, getDelay()));
+                    if (i < totalVotes - 1) await new Promise(r => setTimeout(r, 200));
                 }
-                didVote = true;
             } else {
-                Utils.Debug.warn('[AutoHonor] No eligible candidates found.');
+                Utils.Debug.warn('[AutoHonor] No eligible candidates found matching the selected mode.');
             }
         }
 
-        if (didVote) {
-            Utils.Debug.log('[AutoHonor] Committing/Finalizing ballot...');
-            await Utils.LCU.post('/lol-honor/v1/ballot').then(response => {
-                Utils.Debug.log('[AutoHonor] Ballot finalized successfully.', response);
-            }).catch(err => {
-                Utils.Debug.error('[AutoHonor] Ballot finalization failed:', err);
-            });
+        if (cancelled) return;
 
-            await Utils.LCU.post('/lol-honor-v2/v1/level-change/ack').catch(() => {});
-        } else {
-            Utils.Debug.log('[AutoHonor] No votes staged — skipped finalize and ack.');
-        }
+        // finalize the ballot
+        Utils.Debug.log('[AutoHonor] Committing/Finalizing ballot...');
+        await Utils.LCU.post('/lol-honor/v1/ballot').then(response => {
+            Utils.Debug.log('[AutoHonor] Ballot finalized successfully.', response);
+        }).catch(err => {
+            Utils.Debug.error('[AutoHonor] Ballot finalization failed:', err);
+        });
+
+        // Automatically acknowledge honor level changes if pending
+        await Utils.LCU.post('/lol-honor-v2/v1/level-change/ack').catch(() => {});
 
     } catch(err) {
         Utils.Debug.error('[AutoHonor] Critical error encountered during runtime:', err);
+    } finally {
+        unregisterPanic();
     }
 }
 
 export function load() {
-    Utils.Debug.log('[AutoHonor] Module loaded.');
-
-    if (Utils.LCU?.observe) {
+    if (Utils.LCU && Utils.LCU.observe) {
         Utils.LCU.observe('/lol-gameflow/v1/gameflow-phase', e => {
+            //Utils.Debug.log('[AutoHonor] Gameflow phase transition detected:', e.data);
+            
             const isHonorPhase = e.data === 'PreEndOfGame' || e.data === 'EndOfGame';
-
             if (!isHonorPhase && e.data !== 'WaitingForStats') {
+                /* if (honorAttemptedForCurrentGame) {
+                    Utils.Debug.log('[AutoHonor] Transitioned out of postgame. Clearing active session tracking flags.');
+                } */
                 honorAttemptedForCurrentGame = false;
-                return;
             }
 
-            if (isHonorPhase && !honorAttemptedForCurrentGame) {
-                Utils.Debug.log('[AutoHonor] Gameflow phase trigger:', e.data);
-                triggerAutoHonorIfReady();
+            const currentEnabled = Utils.Store.get('autoHonor', 'enabled');
+            if (!currentEnabled) return;
+            if (isHonorPhase) {
+                if (honorAttemptedForCurrentGame) {
+                    //Utils.Debug.log('[AutoHonor] Postgame lobby detected, but action has already processed for this game session.');
+                    return;
+                }
+                Utils.Debug.info('[AutoHonor] Reached Postgame! Directing execution thread to autoHonorTeammate().');
+                honorAttemptedForCurrentGame = true;
+                autoHonorTeammate();
             }
         });
-        Utils.Debug.log('[AutoHonor] Gameflow observer registered.');
     }
 }
