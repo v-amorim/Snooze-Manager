@@ -2,7 +2,7 @@
  * @name Snooze-WhaleHelper
  * @version 1.0.1
  * @author SnoozeFest - github@ReformedDoge
- * @description Whale Helper: Rerollable Pool Button (Loot page), Drop Chance viewer (Loot page), Skin Tier Badges (Champ Select), Hide Unowned Skins/Chromas (Champion Select).
+ * @description Whale Helper: Rerollable Pool Button (Loot page), Drop Chance viewer (Loot page), Skin Tier Badges (Champ Select), Hide Unowned Skins/Chromas (Champion Select), Skin Randomizer (Champ Select).
  * @link https://github.com/ReformedDoge/Snooze-Manager
  */
 import Utils from './generalUtils.js';
@@ -12,6 +12,7 @@ const STYLE_ID = 'sm-whale-helper-styles';
 const BTN_ID   = 'sm-whale-helper-btn';
 const PANEL_ID = 'sm-whale-helper-panel';
 const BTN_ATTR = 'data-sm-whale-btn';
+const RANDOMIZER_BTN_ATTR = 'data-sm-randomizer-btn';
 
 // Skin Tier Config
 const HIDE_CLASSIC = true;
@@ -25,6 +26,7 @@ let isDropOddsEnabled = true;
 let isHideUnownedEnabled = false;
 let isBlacklistEnabled = false;
 let isBlacklistLockedMode = false;
+let isSkinRandomizerEnabled = false;
 
 let smSettingsArray = [];
 
@@ -217,7 +219,7 @@ function injectStyles() {
         .sm-whale-tab-icon.active { border-color: #c8aa6e; background: rgba(200,170,110,0.25); box-shadow: inset 0 0 0 1px #c8aa6e; }
         .sm-whale-tab-icon img { width: 100%; height: 100%; object-fit: contain; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5)); }
 
-        /* -- CHAMP SELECT TIER BADGES -- */
+        /* CHAMP SELECT TIER BADGES */
 
         .sm-tier-badge {
             display: flex; align-items: center; justify-content: center; gap: 4px;
@@ -234,6 +236,27 @@ function injectStyles() {
         
         .champion-skin-name { display: flex !important; flex-direction: column !important; align-items: center !important; }
         .skin-name-text { display: block !important; }
+
+        /* SKIN RANDOMIZER BUTTON */
+        .skin-select { position: relative; }
+        .sm-randomizer-btn {
+            position: absolute; top: 8px; right: 8px;
+            display: flex; align-items: center; justify-content: center;
+            width: 32px; height: 32px; border-radius: 6px;
+            background: rgba(0,0,0,0.6); border: 1px solid rgba(200,170,110,0.3);
+            cursor: pointer; transition: all 0.2s; padding: 6px;
+            flex-shrink: 0;
+        }
+        .sm-randomizer-btn:hover {
+            background: rgba(200,170,110,0.2); border-color: #c8aa6e;
+            transform: scale(1.1);
+        }
+        .sm-randomizer-btn img {
+            width: 18px; height: 18px; opacity: 0.8;
+            filter: invert(66%) sepia(9%) saturate(415%) hue-rotate(3deg) brightness(93%) contrast(88%);
+            transition: opacity 0.2s; display: block;
+        }
+        .sm-randomizer-btn:hover img { opacity: 1; }
     `;
     document.head.appendChild(style);
 }
@@ -1965,7 +1988,7 @@ export function installEmberHook() {
     });
 
     Utils.Hooks.Ember.registerRule({
-        name: 'skin-tier-select-hook',
+        name: 'skin-select-hook',
         matcher: 'skin-select',
         wraps: [
             {
@@ -2019,8 +2042,66 @@ export function installEmberHook() {
         ]
     });
 
-    
-        Utils.Debug.log('[WhaleHelper] Ember hooks registered.');
+    // Skin randomizer dice button
+    Utils.Hooks.Ember.registerRule({
+        name: 'skin-randomizer-hook',
+        matcher: 'skin-select',
+        hookMethods: [{
+            name: 'didRender',
+            callback(Ember, original, ...args) {
+                original(...args);
+                if (!isSkinRandomizerEnabled || !this.element) return;
+                if (this.element.querySelector(`[${RANDOMIZER_BTN_ATTR}]`)) return;
+
+                const btn = document.createElement('button');
+                btn.setAttribute(RANDOMIZER_BTN_ATTR, '');
+                btn.className = 'sm-randomizer-btn';
+                btn.title = 'Random Skin';
+                btn.innerHTML = '<img src="/fe/lol-static-assets/svg/bad_luck_protection_dice.svg" width="18" height="18">';
+
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const skins = this.carouselSkins;
+                    if (!skins || !Array.isArray(skins) || skins.length < 2) return;
+                    const owned = skins.filter(s => {
+                        const isOwned = s.unlocked || s.ownership?.owned;
+                        return isOwned && !s.isBase && s.id % 1000 !== 0;
+                    });
+                    if (owned.length < 2) return;
+                    const currentId = this.get?.('viewSkin.id') ?? this.get?.('selectedSkinId');
+                    const pool = currentId ? owned.filter(s => s.id !== currentId) : owned;
+                    if (pool.length === 0) return;
+                    let pick = pool[Math.floor(Math.random() * pool.length)];
+
+                    if (pick.childSkins && Array.isArray(pick.childSkins) && pick.childSkins.length > 0) {
+                        const ownedChromas = pick.childSkins.filter(c => c.unlocked || c.ownership?.owned);
+                        if (ownedChromas.length > 0) {
+                            const chromaOptions = [null, ...ownedChromas];
+                            const chromaPick = chromaOptions[Math.floor(Math.random() * chromaOptions.length)];
+                            if (chromaPick) pick = chromaPick;
+                        }
+                    }
+
+                    if (typeof this.setSkin === 'function') {
+                        this.setSkin(pick);
+                    } else if (typeof this.setViewSkin === 'function') {
+                        this.setViewSkin(pick);
+                    }
+                });
+
+                this.element.appendChild(btn);
+            }
+        }, {
+            name: 'willDestroyElement',
+            callback(Ember, original, ...args) {
+                const btn = this.element?.querySelector(`[${RANDOMIZER_BTN_ATTR}]`);
+                if (btn) btn.remove();
+                original(...args);
+            }
+        }]
+    });
+
+    Utils.Debug.log('[WhaleHelper] Ember hooks registered.');
 }
 
 export function init(context) {
@@ -2037,6 +2118,7 @@ export function init(context) {
     isSkinTierEnabled = Utils.Store.get('whaleHelper', 'skinTierEnabled') ?? true;
     isDropOddsEnabled = Utils.Store.get('whaleHelper', 'dropOddsEnabled') ?? true;
     isHideUnownedEnabled = Utils.Store.get('whaleHelper', 'hideUnownedEnabled') ?? false;
+	isSkinRandomizerEnabled = Utils.Store.get('whaleHelper', 'skinRandomizerEnabled') ?? false;
     isBlacklistEnabled = Utils.Store.get('whaleHelper', 'skinBlacklistEnabled') ?? false;
     isBlacklistLockedMode = Utils.Store.get('whaleHelper', 'skinBlacklistLockedMode') ?? false;
 
@@ -2101,6 +2183,16 @@ export function init(context) {
             },
             {
                 type: 'toggle',
+                id: 'sm:skinRandomizer',
+                label: 'Show Skin Randomizer (Champ Select)',
+                value: isSkinRandomizerEnabled,
+                onChange: (val) => {
+                    isSkinRandomizerEnabled = val;
+                    Utils.Store.set('whaleHelper', 'skinRandomizerEnabled', val);
+                }
+            },
+			{
+                type: 'toggle',
                 id: 'sm:skinBlacklistEnabled',
                 label: 'Enable Skin Blacklist (Champ Select)',
                 value: isBlacklistEnabled,
@@ -2118,7 +2210,7 @@ export function init(context) {
         window.SnoozeManager.registerModule({
             id: 'whaleHelper',
             name: 'Whale Helper',
-            description: 'Shows you which rerollable skins you don\'t own yet, and adds a button to the loot page for easy access. It also adds skin tier badges in champion select.',
+            description: 'Shows you which rerollable skins you don\'t own yet, and adds a button to the loot page for easy access. It also adds skin tier badges & Skin Randomizer button in champion select.',
             settings: smSettingsArray
         });
     }else {
@@ -2150,6 +2242,10 @@ export function init(context) {
                     Utils.Store.set('whaleHelper', 'skinBlacklistLockedMode', false);
                 }
                 syncTogglesUI();
+            }));
+
+            plugin.appendChild(Utils.Settings.createToggleRow("Show Skin Randomizer (Champ Select)", isSkinRandomizerEnabled, (val) => {
+                isSkinRandomizerEnabled = val; Utils.Store.set('whaleHelper', 'skinRandomizerEnabled', val);
             }));
 
             plugin.appendChild(Utils.Settings.createToggleRow("Enable Skin Blacklist (Champ Select)", isBlacklistEnabled, (val) => {
