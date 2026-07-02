@@ -381,6 +381,7 @@ export function init(context) {
                     id: 'sm:lowPrioWarningSuppress',
                     label: 'Enable Warning Suppression',
                     description: 'Blocks penalty and lockout dialogs before they can pop up',
+                    warning: 'This only hides the native popup - it does not cancel or reduce the actual penalty (queue dodge, leaver-buster, etc). The restriction still applies; you just won\'t see the dialog telling you about it.',
                     value: enabled,
                     onChange: (v) => setEnabled(v)
                 }
@@ -389,7 +390,7 @@ export function init(context) {
     } else {
         Utils.DOM.observer.observe('lol-uikit-scrollable.low-prio-warning-suppress-settings', (plugin) => {
             plugin.innerHTML = '';
-            plugin.appendChild(Utils.Settings.createToggleRow('Enable Warning Suppression', enabled, (next) => {
+            plugin.appendChild(Utils.Settings.createToggleRow('[!] Enable Warning Suppression (hides dialog only, penalty still applies)', enabled, (next) => {
                 setEnabled(next);
             }));
         });

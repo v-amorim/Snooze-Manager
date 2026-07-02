@@ -572,6 +572,7 @@ export function init(context) {
 					id: 'sm:unlockProfileBackground',
 					label: 'Unlock Profile Background',
 					description: 'Fakes champion and skin ownership so any splash can be set as your profile background',
+					warning: 'Grey area: rewrites live champion-ownership data exchanged with Riot\'s servers. Purely cosmetic (grants no real ownership), but it is API tampering, not just a UI tweak.',
 					value: unlockBackgroundEnabled,
 					onChange: (val) => toggleUnlockProfileBackground(val)
 				},
@@ -585,7 +586,7 @@ export function init(context) {
         Utils.DOM.observer.observe('lol-uikit-scrollable.profile-tweaks-settings', (plugin) => {
             plugin.innerHTML = '';
 
-            const toggleRow = Utils.Settings.createToggleRow('Unlock Profile Background', unlockBackgroundEnabled, (next) => {
+            const toggleRow = Utils.Settings.createToggleRow('[!] Unlock Profile Background (grey area - fakes ownership data)', unlockBackgroundEnabled, (next) => {
                 toggleUnlockProfileBackground(next);
             });
             toggleRow.classList.add('plugins-settings-row');
@@ -618,7 +619,7 @@ async function installChampionInventoryHook() {
         const summonerSummary = await Utils.LCU.get('/lol-summoner/v1/current-summoner');
         if (!summonerSummary) return;
 
-        const summonerId = summonerSummary.summonerId || summonerSummary.summonerIdStr || summonerSummary.id || summonerSummary.summonerId;
+        const summonerId = summonerSummary.summonerId || summonerSummary.summonerIdStr || summonerSummary.id;
         if (!summonerId) return;
 
         const inventoryEndpointPattern = new RegExp(`/lol-champions/v1/inventories/${summonerId}/champions`);

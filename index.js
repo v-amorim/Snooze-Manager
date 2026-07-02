@@ -106,6 +106,7 @@ const MODULE_CATEGORY = {
   profileTweaks: 'Profile & Social',
   customOnlineStatus: 'Profile & Social',
   socialPanelTweaks: 'Profile & Social',
+  profileWinLose: 'Profile & Social',
   whaleHelper: 'Store & Loot',
   whaleHelperSkins: 'Champion Select',
   clientWindowTweaks: 'Client',
@@ -149,8 +150,11 @@ const Modal = (function() {
       .pm-info { display: inline-flex; align-items: center; margin-left: 6px; color: #5a7080; vertical-align: middle; pointer-events: auto; cursor: help; transition: color 0.15s; }
       .pm-info:hover { color: #c8aa6e; }
       .pm-info svg { display: block; }
+      .pm-info-warning { color: #e49429; }
+      .pm-info-warning:hover { color: #ff6b4a; }
       .pm-tooltip { position: fixed; z-index: 2147483647; max-width: 260px; padding: 10px 12px; background: rgba(1, 10, 19, 0.95); border: 1px solid rgba(200, 170, 110, 0.35); border-radius: 8px; color: #f0e6d2; font-size: 12px; line-height: 1.4; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6); backdrop-filter: blur(25px) saturate(140%); pointer-events: none; opacity: 0; transition: opacity 0.15s ease; }
       .pm-tooltip.pm-show { opacity: 1; }
+      .pm-tooltip.pm-tooltip-warning { border-color: rgba(228, 148, 41, 0.55); }
       .pm-content { flex: 1; padding: 24px; overflow-y: auto; position: relative; }
       .pm-tab-content { display: none; animation: fadeIn 0.2s ease-in-out; }
       .pm-tab-content.active { display: block; }
@@ -387,7 +391,7 @@ const Modal = (function() {
       name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
     // custom hover tooltip that matches the menu styling; only fires on the "i" icon
-    function attachInfoTooltip(infoEl, text) {
+    function attachInfoTooltip(infoEl, text, isWarning = false) {
       infoEl.addEventListener('mouseenter', () => {
         let tip = document.getElementById('pm-tooltip-el');
         if (!tip) {
@@ -397,6 +401,7 @@ const Modal = (function() {
           (_root || document.body).appendChild(tip);
         }
         tip.textContent = text;
+        tip.classList.toggle('pm-tooltip-warning', isWarning);
         tip.classList.add('pm-show');
         const r = infoEl.getBoundingClientRect();
         const tw = tip.offsetWidth;
@@ -430,6 +435,13 @@ const Modal = (function() {
             info.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
             attachInfoTooltip(info, setting.description);
             lblTitle.appendChild(info);
+          }
+          if (setting.warning) {
+            const warn = document.createElement('span');
+            warn.className = 'pm-info pm-info-warning';
+            warn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+            attachInfoTooltip(warn, setting.warning, true);
+            lblTitle.appendChild(warn);
           }
           lblWrapper.appendChild(lblTitle);
 
@@ -796,20 +808,41 @@ const Modal = (function() {
         panicBtn.style.borderColor = '#0ac8b9';
         panicBtn.style.color = '#0ac8b9';
 
-        const handler = (ev) => {
-          ev.preventDefault();
-          ev.stopPropagation();
-          let newKey = ev.key;
-          if (newKey === ' ') newKey = 'Space';
-          document.removeEventListener('keydown', handler, { capture: true });
+        const cleanup = () => {
+          document.removeEventListener('keydown', onKeyDown, { capture: true });
+          document.removeEventListener('mousedown', onMouseDown, { capture: true });
           delete panicBtn.dataset.capturing;
-          currentPanicKey = newKey;
-          Utils.Store.set('global', 'panicKey', newKey);
-          panicBtn.textContent = newKey;
           panicBtn.style.borderColor = '';
           panicBtn.style.color = '';
         };
-        document.addEventListener('keydown', handler, { capture: true });
+
+        const onKeyDown = (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+
+          if (ev.key === 'Escape') {
+            panicBtn.textContent = currentPanicKey;
+            cleanup();
+            return;
+          }
+
+          let newKey = ev.key;
+          if (newKey === ' ') newKey = 'Space';
+          currentPanicKey = newKey;
+          Utils.Store.set('global', 'panicKey', newKey);
+          panicBtn.textContent = newKey;
+          cleanup();
+        };
+
+        const onMouseDown = (ev) => {
+          if (!panicBtn.contains(ev.target)) {
+            panicBtn.textContent = currentPanicKey;
+            cleanup();
+          }
+        };
+
+        document.addEventListener('keydown', onKeyDown, { capture: true });
+        document.addEventListener('mousedown', onMouseDown, { capture: true });
       });
 
       panicRow.appendChild(panicLabel);
@@ -1065,6 +1098,7 @@ import * as lowPrioWarningSuppressModule from './modules/LowPrioWarningSuppress.
 import * as autoQueueModule from './modules/autoQueue.js';
 import * as modeSelectorTweaksModule from './modules/modeSelectorTweaks.js';
 import * as skinRandomizerModule from './modules/skinRandomizer.js';
+import * as profileWinLoseModule from './modules/profileWinLose.js';
 
 const registeredModules = [];
 
@@ -1089,6 +1123,7 @@ export async function init(ctx) {
   socialPanelTweaksModule.installEmberHook?.();
   whaleHelperModule.installEmberHook?.();
   modeSelectorTweaksModule.installEmberHook?.();
+  skinRandomizerModule.installEmberHook?.();
   
   Utils.LCU.bind(ctx);
 
@@ -1139,6 +1174,7 @@ export async function init(ctx) {
   autoQueueModule.init(ctx);
   modeSelectorTweaksModule.init(ctx);
   skinRandomizerModule.init(ctx);
+  profileWinLoseModule.init(ctx);
 }
 
 export async function load(context) {
@@ -1169,6 +1205,7 @@ export async function load(context) {
   autoQueueModule.load();
   modeSelectorTweaksModule.load();
   skinRandomizerModule.load();
+  profileWinLoseModule.load();
 }
 
 const LEGACY_MIGRATION_MAP = {
