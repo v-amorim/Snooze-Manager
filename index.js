@@ -90,29 +90,10 @@ const CATEGORY_ORDER = [
   'Other',
 ];
 const DEFAULT_CATEGORY = 'Other';
-const MODULE_CATEGORY = {
-  autoLockChampion: 'Champion Select',
-  champSelectQuitButton: 'Champion Select',
-  skinRandomizer: 'Champion Select',
-  aramNocd: 'Champion Select',
-  SnoozeBalanceTooltip: 'Champion Select',
-  arenaGod: 'Champion Select',
-  autoAccept: 'Matchmaking',
-  autoQueue: 'Matchmaking',
-  modeSelectorTweaks: 'Matchmaking',
-  lowPrioWarningSuppress: 'Matchmaking',
-  gameAnalysisPopup: 'In-Game & Post-Game',
-  autoHonor: 'In-Game & Post-Game',
-  profileTweaks: 'Profile & Social',
-  customOnlineStatus: 'Profile & Social',
-  socialPanelTweaks: 'Profile & Social',
-  profileWinLose: 'Profile & Social',
-  whaleHelper: 'Store & Loot',
-  whaleHelperSkins: 'Champion Select',
-  clientWindowTweaks: 'Client',
-};
-function categoryOrderIndex(moduleId) {
-  const idx = CATEGORY_ORDER.indexOf(MODULE_CATEGORY[moduleId] || DEFAULT_CATEGORY);
+// Category is self-declared by each module in its own registerModule({ category, ... })
+// call (see modules/*.js) - falls back to "Other" for any module that omits it.
+function categoryOrderIndex(category) {
+  const idx = CATEGORY_ORDER.indexOf(category || DEFAULT_CATEGORY);
   return idx === -1 ? CATEGORY_ORDER.length : idx;
 }
 
@@ -390,8 +371,8 @@ const Modal = (function() {
     const orderedModules = registeredModules
       .filter(mod => mod.settings && mod.settings.length > 0)
       .sort((a, b) => {
-        const oa = categoryOrderIndex(a.id);
-        const ob = categoryOrderIndex(b.id);
+        const oa = categoryOrderIndex(a.category);
+        const ob = categoryOrderIndex(b.category);
         if (oa !== ob) return oa - ob;
         return a.name.localeCompare(b.name);
       });
@@ -540,7 +521,7 @@ const Modal = (function() {
     // plus a dedicated tab for every module with richer settings.
     const modulesByCategory = new Map();
     orderedModules.forEach(mod => {
-      const category = MODULE_CATEGORY[mod.id] || DEFAULT_CATEGORY;
+      const category = mod.category || DEFAULT_CATEGORY;
       if (!modulesByCategory.has(category)) modulesByCategory.set(category, []);
       modulesByCategory.get(category).push(mod);
     });
@@ -1111,6 +1092,30 @@ import * as modeSelectorTweaksModule from './modules/modeSelectorTweaks.js';
 import * as skinRandomizerModule from './modules/skinRandomizer.js';
 import * as profileWinLoseModule from './modules/profileWinLose.js';
 
+// Single manifest driving installEmberHook()/init()/load() below - adding a module
+// is now: write the import above, then add its namespace here. Call order only
+// matters in that load() implicitly depends on Assets.init() having run first.
+const MODULES = [
+  autoAcceptModule,
+  aramNocdModule,
+  autoLockChampionModule,
+  champSelectQuitButtonModule,
+  SnoozeBalanceTooltipModule,
+  gameAnalysisPopupModule,
+  customOnlineStatusModule,
+  clientWindowTweaksModule,
+  profileTweaksModule,
+  autoHonorModule,
+  arenaGodModule,
+  socialPanelTweaksModule,
+  whaleHelperModule,
+  lowPrioWarningSuppressModule,
+  autoQueueModule,
+  modeSelectorTweaksModule,
+  skinRandomizerModule,
+  profileWinLoseModule,
+];
+
 const registeredModules = [];
 
 
@@ -1131,11 +1136,8 @@ export async function init(ctx) {
   }
 
   Utils.Hooks.Ember.install(ctx);
-  socialPanelTweaksModule.installEmberHook?.();
-  whaleHelperModule.installEmberHook?.();
-  modeSelectorTweaksModule.installEmberHook?.();
-  skinRandomizerModule.installEmberHook?.();
-  
+  MODULES.forEach(m => m.installEmberHook?.());
+
   Utils.LCU.bind(ctx);
 
   // initialize debug flag from settings store
@@ -1168,24 +1170,7 @@ export async function init(ctx) {
   }
   };
 
-  autoAcceptModule.init(ctx);
-  aramNocdModule.init(ctx);
-  autoLockChampionModule.init(ctx);
-  champSelectQuitButtonModule.init(ctx);
-  SnoozeBalanceTooltipModule.init(ctx);
-  gameAnalysisPopupModule.init(ctx);
-  customOnlineStatusModule.init(ctx);
-  clientWindowTweaksModule.init(ctx);
-  profileTweaksModule.init(ctx);
-  autoHonorModule.init(ctx);
-  arenaGodModule.init(ctx);
-  socialPanelTweaksModule.init(ctx);
-  whaleHelperModule.init(ctx);
-  lowPrioWarningSuppressModule.init(ctx);
-  autoQueueModule.init(ctx);
-  modeSelectorTweaksModule.init(ctx);
-  skinRandomizerModule.init(ctx);
-  profileWinLoseModule.init(ctx);
+  MODULES.forEach(m => m.init(ctx));
 }
 
 export async function load(context) {
@@ -1199,24 +1184,7 @@ export async function load(context) {
   checkForUpdates();
 
   
-  autoAcceptModule.load();
-  aramNocdModule.load();
-  autoLockChampionModule.load();
-  champSelectQuitButtonModule.load();
-  SnoozeBalanceTooltipModule.load();
-  gameAnalysisPopupModule.load();
-  customOnlineStatusModule.load();
-  clientWindowTweaksModule.load();
-  profileTweaksModule.load();
-  autoHonorModule.load();
-  arenaGodModule.load();
-  socialPanelTweaksModule.load();
-  whaleHelperModule.load();
-  lowPrioWarningSuppressModule.load();
-  autoQueueModule.load();
-  modeSelectorTweaksModule.load();
-  skinRandomizerModule.load();
-  profileWinLoseModule.load();
+  MODULES.forEach(m => m.load());
 }
 
 const LEGACY_MIGRATION_MAP = {

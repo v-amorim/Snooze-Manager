@@ -1167,6 +1167,7 @@ export function init(context) {
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({
             id: 'socialPanelTweaks',
+            category: 'Profile & Social',
             name: 'Social Panel Tweaks',
             description: 'Enhances the social panel with queue labels, in-game timers, connected party status visuals, and a collapsible sidebar.',
             settings: [

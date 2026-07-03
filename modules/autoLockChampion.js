@@ -486,6 +486,7 @@ export function init(context) {
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({
             id: 'autoLockChampion',
+            category: 'Champion Select',
             name: 'Auto Select Champion',
             description: 'Automatically hovers, locks, or bans champions by priority & role in champion select, with separate top-3 priority lists per role.',
             settings: [

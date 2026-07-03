@@ -484,6 +484,7 @@ export function init(context) {
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({
             id: 'gameAnalysisPopup',
+            category: 'In-Game & Post-Game',
             name: 'Player Analysis',
             description: 'Auto-opens a modal displaying rank and performance stats when game starts. Optionally shows stats in Champ Select.',
             settings: [

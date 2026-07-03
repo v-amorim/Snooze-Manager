@@ -564,6 +564,7 @@ export function init(context) {
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({
             id: 'profileTweaks',
+            category: 'Profile & Social',
             name: 'Profile Tweaks',
             description: 'Remove profile banner/border, manage token preferences, and unlock profile background.',
             settings: [

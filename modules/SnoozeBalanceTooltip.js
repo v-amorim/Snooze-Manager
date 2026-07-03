@@ -374,6 +374,7 @@ export function init(context) {
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({
             id: 'SnoozeBalanceTooltip',
+            category: 'Champion Select',
             name: 'Balance Tooltip',
             description: 'Hover over champions in special modes (ARAM/URF/Arena) to see balance info/nerfs natively.',
             settings: [

@@ -67,6 +67,7 @@ export function init(context) {
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({
             id: 'autoHonor',
+            category: 'In-Game & Post-Game',
             name: 'Auto Honor',
             description: 'Automatically honors a teammate, enemy, or random player when the game finishes.',
             settings: [

@@ -129,6 +129,7 @@ export function init(context) {
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({
             id: 'autoAccept',
+            category: 'Matchmaking',
             name: 'Auto Accept Match',
             description: 'Automatically accepts matchmaking ready checks with optional delay and queue exit on decline.',
             settings: [

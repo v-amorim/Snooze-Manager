@@ -102,6 +102,7 @@ export function init(context) {
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({
             id: 'champSelectQuitButton',
+            category: 'Champion Select',
             name: 'Champ Select Dodge Button',
             description: 'Adds a convenient native dodge button inside the champion select action bar.',
             settings: [{

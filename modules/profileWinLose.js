@@ -534,6 +534,7 @@ export function init(context) {
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({
             id: 'profileWinLose',
+            category: 'Profile & Social',
             name: 'Profile Win/Loss',
             description: "Shows a summoner's win/loss record, win rate, and KDA on their profile page.",
             settings: [

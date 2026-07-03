@@ -2070,6 +2070,7 @@ export function init(context) {
         // Loot page features
         window.SnoozeManager.registerModule({
             id: 'whaleHelper',
+            category: 'Store & Loot',
             name: 'Whale Helper',
             description: 'Shows which rerollable skins you don\'t own yet via a button on the loot page, and previews loot drop odds.',
             settings: [
@@ -2158,6 +2159,7 @@ export function init(context) {
 
         window.SnoozeManager.registerModule({
             id: 'whaleHelperSkins',
+            category: 'Champion Select',
             name: 'Skin Carousel Tweaks',
             description: 'Adds skin tier badges in champion select, can hide skins & chromas you don\'t own from the skin carousel, and lets you blacklist specific skins.',
             settings: smSettingsArray

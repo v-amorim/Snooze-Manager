@@ -267,6 +267,7 @@ export function init(context) {
   if (window.SnoozeManager && window.SnoozeManager.registerModule) {
     window.SnoozeManager.registerModule({
       id: 'skinRandomizer',
+      category: 'Champion Select',
       name: 'Skin Randomizer',
       description:
         'Adds a "Random Skin" dice button to the champion select carousel and marks which skins you own (and which have chromas) on the carousel dots.',

@@ -246,6 +246,7 @@ export function init(context) {
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({
             id: 'arenaGod',
+            category: 'Champion Select',
             name: 'Arena God Tracker',
             description: 'Enhances Arena mode champion grid and progress display natively with status icons on individual grid tiles.',
             settings: [{

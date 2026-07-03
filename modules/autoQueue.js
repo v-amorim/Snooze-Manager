@@ -327,6 +327,7 @@ export function init(context) {
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({
             id: 'autoQueue',
+            category: 'Matchmaking',
             name: 'Auto Queue',
             description: 'Automatically re-queues into your chosen game mode after a match ends, with configurable delay.',
             settings: [

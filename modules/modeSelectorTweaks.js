@@ -468,6 +468,7 @@ export function init(context) {
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({
             id: 'modeSelectorTweaks',
+            category: 'Matchmaking',
             name: 'Mode Selector Tweaks',
             description: 'Declutter the game mode selection screen by hiding entire tabs, modes, or specific queues.',
             settings: [{

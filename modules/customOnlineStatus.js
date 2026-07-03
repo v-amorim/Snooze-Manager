@@ -211,6 +211,7 @@ export function init(context) {
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({
             id: 'customOnlineStatus',
+            category: 'Profile & Social',
             name: 'Custom Online Status',
             description: 'Overrides your online status indicator. Menu available directly on your profile avatar in the client.',
             settings: [

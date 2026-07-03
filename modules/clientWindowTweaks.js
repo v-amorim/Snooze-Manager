@@ -639,6 +639,7 @@ export function init(context) {
   if (window.SnoozeManager && window.SnoozeManager.registerModule) {
     window.SnoozeManager.registerModule({
       id: 'clientWindowTweaks',
+      category: 'Client',
       name: 'Client Window Tweaks',
       description: 'Apply custom client resolution presets, title, and drag-area height on startup or any time.',
       settings: [

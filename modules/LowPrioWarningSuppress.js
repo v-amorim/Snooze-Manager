@@ -373,6 +373,7 @@ export function init(context) {
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({
             id: MODULE_KEY,
+            category: 'Matchmaking',
             name: 'Low Priority Warning Suppress',
             description: 'Suppresses low priority queue, leaverbuster, queue dodge, and ready-check-failer warning dialogs.',
             settings: [
