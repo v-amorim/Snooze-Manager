@@ -244,15 +244,25 @@ const Modal = (function() {
     modal.appendChild(body);
 
     let activeTabId = 'tab-lookup';
+    // Custom-render settings (type: 'custom') are expensive to build eagerly - some
+    // fetch live LCU data (e.g. ProfileTweaks) the moment the modal is created, long
+    // before the user ever opens that tab. Defer them until the tab is first switched to.
+    const _pendingTabRenders = new Map(); // tabId -> Array<() => void>
     function switchTab(tabId) {
       activeTabId = tabId;
       sidebar.querySelectorAll('.pm-tab').forEach(t => t.classList.remove('active'));
       content.querySelectorAll('.pm-tab-content').forEach(c => c.classList.remove('active'));
-      
+
       const tab = sidebar.querySelector(`[data-target="${tabId}"]`);
       const tabContent = content.querySelector(`#${tabId}`);
       if (tab) tab.classList.add('active');
       if (tabContent) tabContent.classList.add('active');
+
+      const pending = _pendingTabRenders.get(tabId);
+      if (pending) {
+        _pendingTabRenders.delete(tabId);
+        pending.forEach(render => render());
+      }
     }
 
     function createTab(id, title, isActive = false) {
@@ -419,7 +429,7 @@ const Modal = (function() {
     }
 
     // renders one setting (toggle/select/textarea/custom) into a tab page
-    function appendSettingRow(tabContent, mod, setting) {
+    function appendSettingRow(tabContent, mod, setting, tabId) {
         if (setting.type === 'toggle') {
           const row = document.createElement('div');
           row.className = 'pm-row';
@@ -517,9 +527,10 @@ const Modal = (function() {
           row.style.marginBottom = '0';
           
           if (setting.render) {
-            setting.render(row);
+            if (!_pendingTabRenders.has(tabId)) _pendingTabRenders.set(tabId, []);
+            _pendingTabRenders.get(tabId).push(() => setting.render(row));
           }
-          
+
           tabContent.appendChild(row);
         }
     }
@@ -567,7 +578,7 @@ const Modal = (function() {
             modBlock.appendChild(d);
           }
           tabContent.appendChild(modBlock);
-          mod.settings.forEach((setting) => appendSettingRow(tabContent, mod, setting));
+          mod.settings.forEach((setting) => appendSettingRow(tabContent, mod, setting, tabId));
         });
 
         content.appendChild(tabContent);
@@ -592,7 +603,7 @@ const Modal = (function() {
         tabContent.appendChild(modTitle);
         tabContent.appendChild(modDesc);
 
-        mod.settings.forEach((setting) => appendSettingRow(tabContent, mod, setting));
+        mod.settings.forEach((setting) => appendSettingRow(tabContent, mod, setting, tabId));
         content.appendChild(tabContent);
       });
     });

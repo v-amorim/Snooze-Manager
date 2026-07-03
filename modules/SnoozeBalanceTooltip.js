@@ -12,8 +12,12 @@ let isEnabled = false;
 function toggleFeature(enabled) {
     isEnabled = enabled;
     Utils.Store.set('SnoozeBalanceTooltip', 'enabled', enabled);
-    if (enabled) mountSnoozeBalanceTooltip();
-    else unmountSnoozeBalanceTooltip();
+    if (enabled) {
+        if (Object.keys(balanceData).length === 0) fetchWikiData();
+        mountSnoozeBalanceTooltip();
+    } else {
+        unmountSnoozeBalanceTooltip();
+    }
 }
 
 let currentMode = null;
@@ -394,6 +398,8 @@ export function init(context) {
 }
 
 export function load() {
-    fetchWikiData();
-    if (isEnabled) mountSnoozeBalanceTooltip();
+    if (isEnabled) {
+        fetchWikiData();
+        mountSnoozeBalanceTooltip();
+    }
 }

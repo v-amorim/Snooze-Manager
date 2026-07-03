@@ -2223,7 +2223,11 @@ export function init(context) {
 
 export function load() {
     injectStyles();
-    loadSkinsCache().catch(() => {});
+    // skinsCache backs skin tier badges, the drop-odds champ/skin picker, and the
+    // blacklist editor - only warm it if at least one of those is actually reachable.
+    if (isSkinTierEnabled || isDropOddsEnabled || isHideUnownedEnabled || isBlacklistEnabled) {
+        loadSkinsCache().catch(() => {});
+    }
     loadSkinBlacklist();
     if (isSkinTierEnabled) mountSessionObserver();
     installContextMenuInterceptors();

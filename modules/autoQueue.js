@@ -15,6 +15,9 @@ let _queuing = false;
 let _availableQueues = []; // [{ id, name }] fetched from LCU once
 let _onQueuesLoaded = null; // set by renderSettings; re-renders the select once fetchQueues() resolves
 
+const RETRY_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 1000;
+
 function log(...args) {
     Utils.Debug.log('[AutoQueue]', ...args);
 }
@@ -22,6 +25,21 @@ function log(...args) {
 function toast(kind, message) {
     if (window.Toast && typeof window.Toast[kind] === 'function') {
         window.Toast[kind](message);
+    }
+}
+
+// Retries a request a few times with increasing delay - the load()-time call
+// races the LCU's game-data service warming up right after client start, so
+// a single attempt reliably 500s/404s on a fresh login.
+async function retry(fn, attemptsLeft = RETRY_ATTEMPTS) {
+    try {
+        return await fn();
+    } catch (err) {
+        if (attemptsLeft > 0) {
+            await new Promise(r => setTimeout(r, RETRY_DELAY_MS * (RETRY_ATTEMPTS - attemptsLeft + 1)));
+            return retry(fn, attemptsLeft - 1);
+        }
+        throw err;
     }
 }
 
@@ -33,7 +51,7 @@ function toast(kind, message) {
 async function fetchQueues() {
     log('Fetching available queues from LCU...');
     try {
-        const queues = await Utils.LCU.get('/lol-game-queues/v1/queues');
+        const queues = await retry(() => Utils.LCU.get('/lol-game-queues/v1/queues'));
         if (!Array.isArray(queues)) {
             log('WARN: /lol-game-queues/v1/queues did not return an array:', queues);
             return false;
@@ -188,6 +206,9 @@ function renderSettings(container) {
 
     populateQueueSelect();
     _onQueuesLoaded = populateQueueSelect;
+    // Settings render lazily (only once this tab is opened), so this is also
+    // the first safe point to fetch the queue list instead of doing it in load().
+    if (_availableQueues.length === 0) fetchQueues();
 
     queueSelect.addEventListener('click', (e) => e.stopPropagation());
     queueSelect.addEventListener('change', (e) => {
@@ -343,8 +364,9 @@ export function init(context) {
 }
 
 export async function load() {
-    log('load() called — fetching queues and subscribing to gameflow phase.');
-    await fetchQueues();
+    log('load() called — subscribing to gameflow phase.');
+    // Queue list is only needed to populate the settings dropdown, which now renders
+    // lazily on first tab open (see renderSettings()) - no need to fetch it here too.
 
     if (!Utils.LCU || !Utils.LCU.observe) {
         log('ERROR: Utils.LCU.observe not available — module inactive.');
