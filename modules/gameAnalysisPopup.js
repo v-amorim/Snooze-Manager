@@ -876,120 +876,143 @@ function getCachedGfSession() {
 }
 
 function renderStatsElements(el, statsData, premadeColor) {
-    const legacyExisting = el.querySelector('.pm-champ-select-stats');
-    if (legacyExisting) legacyExisting.remove();
-
-    if (el.style.position !== 'relative') {
-        el.style.position = 'relative';
+    if (window._pmMockStats) {
+        statsData = {
+            empty: false,
+            wr: 69,
+            kda: '4.20',
+            mostPickedCount: 42,
+            mostPickedId: 222, // Jinx
+            rankText: 'CHALLENGER',
+            rankTier: 'CHALLENGER',
+            results: ['win', 'loss', 'win', 'win', 'loss', 'win', 'win', 'win', 'loss', 'win']
+        };
+        premadeColor = '#e84057';
     }
 
-    let existingTop = el.querySelector('.pm-champ-select-stats-top');
-    if (!existingTop) {
-        existingTop = document.createElement('div');
-        existingTop.className = 'pm-champ-select-stats-top';
-        el.appendChild(existingTop);
-    }
-
-    let existingBot = el.querySelector('.pm-champ-select-stats-bottom');
-    if (!existingBot) {
-        existingBot = document.createElement('div');
-        existingBot.className = 'pm-champ-select-stats-bottom';
-        el.appendChild(existingBot);
-    }
-
-    Object.assign(existingTop.style, {
-        position: 'absolute',
-        left: '110px',    
-        top: '1px',      
-        display: 'none',
-        alignItems: 'center',
-        gap: '4px',
-        zIndex: '99',
-        pointerEvents: 'none',
-        whiteSpace: 'nowrap',
-        lineHeight: '1'
+    // Cleanup all injected elements
+    ['.pm-champ-select-stats', '.pm-cs-stats-wrapper', '.pm-cs-stats-row', '.pm-pre-badge', '.pm-rank-badge'].forEach(sel => {
+        el.querySelectorAll(sel).forEach(node => node.remove());
     });
 
-    Object.assign(existingBot.style, {
-        position: 'absolute',
-        left: '110px',    
-        bottom: '-1px',   
-        display: 'none',
-        alignItems: 'center',
-        gap: '4px',
-        zIndex: '99',
-        pointerEvents: 'none',
-        whiteSpace: 'nowrap',
-        lineHeight: '1'
-    });
+    // Fetch native hooks
+    const targetHook = el.querySelector('.player-details');
+    const iconContainer = el.querySelector('.champion-icon-container');
+    const nameContainer = el.querySelector('.summoner-name');
+    
+    if (!targetHook || !iconContainer || !nameContainer) return;
 
-    if ((statsData.empty && !statsData.rankText && !premadeColor) || !isChampSelectStatsEnabled) {
-        existingTop.style.display = 'none';
-        existingTop.innerHTML = '';
-        existingBot.style.display = 'none';
-        existingBot.innerHTML = '';
+    // Reset any previous modifications for clean state
+    targetHook.style.maxHeight = '';
+    targetHook.style.overflow = '';
+    nameContainer.style.display = '';
+    nameContainer.style.alignItems = '';
+    nameContainer.style.justifyContent = '';
+    nameContainer.style.flexDirection = '';
+    nameContainer.style.overflow = '';
+    const nameText = nameContainer.querySelector('.name-text');
+    if (nameText) {
+        nameText.style.flex = '';
+        nameText.style.overflow = '';
+        nameText.style.textOverflow = '';
+        nameText.style.whiteSpace = '';
+    }
+    
+    if ((statsData.empty && !statsData.rankText && !premadeColor) || (!isChampSelectStatsEnabled && !window._pmMockStats)) {
         return;
     }
 
-    const wrColor = statsData.wr === '?' ? '#a09b8c' : (statsData.wr >= 50 ? '#0ac8b9' : '#e84057');
-    
-    let preHtml = '';
+    const isRightSide = el.classList.contains('right');
+
+    targetHook.style.maxHeight = 'none'; 
+    targetHook.style.overflow = 'visible';
+
+    // PRE Badge
     if (premadeColor) {
-        preHtml = `<div style="font-size:10px; font-weight:900; color:#010a13; background:${premadeColor}; padding:1px 4px; border-radius:3px; border:1px solid rgba(255,255,255,0.3); text-transform:uppercase; letter-spacing:0.5px; box-shadow:0 0 4px ${premadeColor}66;">PRE</div>`;
+        if (window.getComputedStyle(iconContainer).position === 'static') {
+            iconContainer.style.position = 'relative';
+        }
+        const preBadge = document.createElement('span');
+        preBadge.className = 'pm-pre-badge';
+        preBadge.textContent = 'PRE';
+        // Strong text shadow ensures readability on any champion skin art
+        preBadge.style.cssText = `position:absolute; top:-4px; left:50%; transform:translateX(-50%); font-size:11px; font-weight:900; color:${premadeColor}; text-shadow:-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 4px #000; text-transform:uppercase; z-index:10; pointer-events:none;`;
+        iconContainer.appendChild(preBadge);
     }
 
-    let mostPickedHtml = '';
-    if (statsData.mostPickedCount >= 3 && statsData.mostPickedId) {
-        const champIcon = Utils.GameData.Assets?.getIcon?.('champs', statsData.mostPickedId) || `/lol-game-data/assets/v1/champion-icons/${statsData.mostPickedId}.png`;
-        mostPickedHtml = `
-            <div style="display:flex; align-items:center; gap:3px; background:rgba(0,0,0,0.6); padding:2px 5px; border-radius:4px; border:1px solid rgba(200,170,110,0.2);">
-                <img src="${champIcon}" style="width:18px; height:18px; border-radius:50%; object-fit:cover;">
-                <span style="font-size:12px; font-weight:bold; color:#a09b8c;">x${statsData.mostPickedCount}</span>
-            </div>
-        `;
-    }
-
-    let rankHtml = '';
+    // Rank Badge (Below champion icon ring)
     if (statsData.rankText) {
+        if (window.getComputedStyle(iconContainer).position === 'static') {
+            iconContainer.style.position = 'relative';
+        }
         const rankColor = getTierColor(statsData.rankTier || statsData.rankText?.split(' ')[0]);
-        rankHtml = `<div style="font-size:10px; font-weight:bold; color:${rankColor}; background:rgba(0,0,0,0.6); padding:1px 4px; border-radius:3px; border:1px solid ${rankColor}44; letter-spacing:0.5px; text-transform:uppercase;">${statsData.rankText}</div>`;
+        const rankBadge = document.createElement('div');
+        rankBadge.className = 'pm-rank-badge';
+        rankBadge.textContent = statsData.rankText;
+        rankBadge.style.cssText = `position:absolute; bottom:-12px; left:50%; transform:translateX(-50%); font-size:9px; font-weight:bold; color:${rankColor}; background:rgba(0,0,0,0.8); padding:1px 4px; border-radius:4px; border:1px solid ${rankColor}44; text-transform:uppercase; line-height:1; white-space:nowrap; z-index:10; pointer-events:none; text-align:center; box-shadow:0 1px 3px rgba(0,0,0,0.5);`;
+        iconContainer.appendChild(rankBadge);
     }
 
-    let dotsHtml = '';
-    if (statsData.results && statsData.results.length > 0) {
-        dotsHtml = `<div style="display:flex; gap:2px; align-items:center; background:rgba(0,0,0,0.6); padding:3px 5px; border-radius:3px; border:1px solid rgba(255,255,255,0.08);">${statsData.results.map(r => {
-            const bg = r === 'win' ? '#0ac8b9' : (r === 'loss' ? '#e84057' : '#746e64');
-            const shadow = r === 'win' ? 'rgba(10,200,185,0.4)' : (r === 'loss' ? 'rgba(232,64,87,0.4)' : 'rgba(0,0,0,0)');
-            return `<div style="width:3px;height:3px;border-radius:50%;background:${bg};box-shadow:0 0 2px ${shadow};"></div>`;
-        }).join('')}</div>`;
-    }
+    // Stats Line (WR/KDA, Most Picked, Dots)
+    let statsRowHtml = '';
+    const wrColor = statsData.wr === '?' ? '#a09b8c' : (statsData.wr >= 50 ? '#0ac8b9' : '#e84057');
 
-    let topContent = preHtml;
+    let badgeWR = '';
     if (!statsData.empty) {
-        topContent += `
-            <div style="display:flex; align-items:center; gap:4px; font-size:10px; color:#a09b8c; background:rgba(0,0,0,0.6); padding:1px 4px; border-radius:3px; border:1px solid rgba(255,255,255,0.08);">
+        badgeWR = `
+            <div style="display:inline-flex; align-items:center; gap:3px; font-size:9px; color:#a09b8c; background:rgba(0,0,0,0.6); padding:2px 3px; border-radius:3px; border:1px solid rgba(255,255,255,0.08); white-space:nowrap;">
                 <span style="color:${wrColor}; font-weight:bold;">${statsData.wr}% WR</span>
                 <span style="color:#746e64;">|</span>
                 <span style="font-weight:600;">${statsData.kda} KDA</span>
             </div>
-            ${mostPickedHtml}
         `;
     }
 
-    if (topContent) {
-        existingTop.style.display = 'flex';
-        existingTop.innerHTML = topContent;
-    } else {
-        existingTop.style.display = 'none';
-        existingTop.innerHTML = '';
+    let badgeMostPicked = '';
+    if (!statsData.empty && statsData.mostPickedCount >= 3 && statsData.mostPickedId) {
+        const champIcon = Utils.GameData.Assets?.getIcon?.('champs', statsData.mostPickedId) || `/lol-game-data/assets/v1/champion-icons/${statsData.mostPickedId}.png`;
+        if (isRightSide) {
+            badgeMostPicked = `
+                <div style="display:inline-flex; align-items:center; gap:3px; background:rgba(0,0,0,0.6); padding:1px 5px; border-radius:3px; border:1px solid rgba(200,170,110,0.2); white-space:nowrap;">
+                    <img src="${champIcon}" style="width:16px; height:16px; border-radius:50%; object-fit:cover;">
+                    <span style="font-size:11px; font-weight:bold; color:#a09b8c;">x${statsData.mostPickedCount}</span>
+                </div>
+            `;
+        } else {
+            badgeMostPicked = `
+                <div style="display:inline-flex; align-items:center; gap:3px; background:rgba(0,0,0,0.6); padding:1px 5px; border-radius:3px; border:1px solid rgba(200,170,110,0.2); white-space:nowrap;">
+                    <span style="font-size:11px; font-weight:bold; color:#a09b8c;">x${statsData.mostPickedCount}</span>
+                    <img src="${champIcon}" style="width:16px; height:16px; border-radius:50%; object-fit:cover;">
+                </div>
+            `;
+        }
     }
 
-    if (rankHtml || dotsHtml) {
-        existingBot.style.display = 'flex';
-        existingBot.innerHTML = `${rankHtml}${dotsHtml}`;
+    let badgeDots = '';
+    if (statsData.results && statsData.results.length > 0) {
+        const dots = statsData.results.map(r => {
+            const bg = r === 'win' ? '#0ac8b9' : (r === 'loss' ? '#e84057' : '#746e64');
+            return `<div style="width:3px;height:3px;border-radius:50%;background:${bg};"></div>`;
+        }).join('');
+        badgeDots = `<div style="display:inline-flex; gap:2px; align-items:center; background:rgba(0,0,0,0.6); padding:3px 4px; border-radius:3px; border:1px solid rgba(255,255,255,0.08); white-space:nowrap;">${dots}</div>`;
+    }
+
+    if (isRightSide) {
+        if (badgeDots) statsRowHtml += badgeDots;
+        if (badgeMostPicked) statsRowHtml += badgeMostPicked;
+        if (badgeWR) statsRowHtml += badgeWR;
     } else {
-        existingBot.style.display = 'none';
-        existingBot.innerHTML = '';
+        if (badgeWR) statsRowHtml += badgeWR;
+        if (badgeMostPicked) statsRowHtml += badgeMostPicked;
+        if (badgeDots) statsRowHtml += badgeDots;
+    }
+
+    if (statsRowHtml) {
+        const statsRow = document.createElement('div');
+        statsRow.className = 'pm-cs-stats-row';
+        statsRow.style.cssText = `display:flex; align-items:center; gap:3px; flex-wrap:wrap; margin-top:2px; justify-content:${isRightSide ? 'flex-end' : 'flex-start'}; width:100%; pointer-events:none; overflow:hidden;`;
+        statsRow.innerHTML = statsRowHtml;
+        targetHook.appendChild(statsRow);
     }
 }
 

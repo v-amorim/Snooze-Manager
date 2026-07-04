@@ -920,12 +920,14 @@ const Assets = {
   champs: {}, items: {}, spells: {}, perks: {}, queues: [],
   _initPromise: null,
   _initialized: false,
+  _maxRetries: 15,
   async init() {
     if (!LCU) return;
+    if (this._initialized) return;
     if (this._initPromise) return this._initPromise;
 
     this._initPromise = (async () => {
-      try {
+      const attemptFetch = async () => {
         const [c, i, s, p, ps, q] = await Promise.all([
           LCU.get('/lol-game-data/assets/v1/champion-summary.json').catch(()=>[]),
           LCU.get('/lol-game-data/assets/v1/items.json').catch(()=>[]),
@@ -934,32 +936,50 @@ const Assets = {
           LCU.get('/lol-game-data/assets/v1/perkstyles.json').catch(()=>({styles:[]})),
           LCU.get('/lol-game-queues/v1/queues').catch(()=>[])
         ]);
-        if (Array.isArray(c) && c.length > 0) c.forEach(x => this.champs[x.id] = x);
-        if (Array.isArray(i) && i.length > 0) i.forEach(x => this.items[x.id] = x);
-        if (Array.isArray(s) && s.length > 0) s.forEach(x => this.spells[x.id] = x);
-        if (Array.isArray(p) && p.length > 0) p.forEach(x => this.perks[x.id] = x);
-        if (ps && Array.isArray(ps.styles) && ps.styles.length > 0) ps.styles.forEach(x => this.perks[x.id] = x);
-        if (Array.isArray(q) && q.length > 0) {
-          this.queues = q.filter(x => x.name && x.id).map(x => ({
-            ...x, tag: 'q_' + x.id
-          })).sort((a, b) => {
-            const catOrder = { PvP: 0, VersusAi: 1, Custom: 2 };
-            const ac = catOrder[a.category] ?? 3;
-            const bc = catOrder[b.category] ?? 3;
-            if (ac !== bc) return ac - bc;
-            return a.name.localeCompare(b.name);
-          });
-        }
-        
-        this._initialized = true;
+        return { c, i, s, p, ps, q };
+      };
 
-        if (this.queues.length === 0 || Object.keys(this.champs).length === 0) {
-          this._initPromise = null;
-          this._initialized = false;
+      for (let attempt = 1; attempt <= this._maxRetries; attempt++) {
+        try {
+          const { c, i, s, p, ps, q } = await attemptFetch();
+
+          if (Array.isArray(c) && c.length > 0) c.forEach(x => this.champs[x.id] = x);
+          if (Array.isArray(i) && i.length > 0) i.forEach(x => this.items[x.id] = x);
+          if (Array.isArray(s) && s.length > 0) s.forEach(x => this.spells[x.id] = x);
+          if (Array.isArray(p) && p.length > 0) p.forEach(x => this.perks[x.id] = x);
+          if (ps && Array.isArray(ps.styles) && ps.styles.length > 0) ps.styles.forEach(x => this.perks[x.id] = x);
+          if (Array.isArray(q) && q.length > 0) {
+            this.queues = q.filter(x => x.name && x.id).map(x => ({
+              ...x, tag: 'q_' + x.id
+            })).sort((a, b) => {
+              const catOrder = { PvP: 0, VersusAi: 1, Custom: 2 };
+              const ac = catOrder[a.category] ?? 3;
+              const bc = catOrder[b.category] ?? 3;
+              if (ac !== bc) return ac - bc;
+              return a.name.localeCompare(b.name);
+            });
+          }
+
+          if (this.queues.length > 0 && Object.keys(this.champs).length > 0) {
+            this._initialized = true;
+            Debug.log(`[Assets] Initialized (${Object.keys(this.champs).length} champs, ${this.queues.length} queues)`);
+            return;
+          }
+
+          if (attempt < this._maxRetries) {
+            const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
+            Debug.log(`[Assets] Retry ${attempt}/${this._maxRetries} in ${delay}ms (game-data may not be ready)`);
+            await new Promise(r => setTimeout(r, delay));
+          }
+        } catch (e) {
+          if (attempt >= this._maxRetries) {
+            Debug.log('[Assets] Failed after max retries', e);
+            throw e;
+          }
+          const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
+          Debug.log(`[Assets] Retry ${attempt}/${this._maxRetries} in ${delay}ms (error: ${e.message})`);
+          await new Promise(r => setTimeout(r, delay));
         }
-      } catch (e) {
-        this._initPromise = null;
-        this._initialized = false;
       }
     })();
 
