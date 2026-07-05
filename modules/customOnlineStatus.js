@@ -45,36 +45,59 @@ const RANK_DIVISION_OPTIONS = [
     { value: 'IV', label: 'IV' }
 ];
 
+function debugLog(tag, msg, extra) {
+    if (extra !== undefined) Utils.Debug.log('[CustomOnlineStatus][' + tag + ']', msg, extra);
+    else Utils.Debug.log('[CustomOnlineStatus][' + tag + ']', msg);
+}
+
 // Push the desired status to /me
 async function syncAvailability() {
     if (!Utils.Store.get('customOnlineStatus', 'enabled') || !Utils.LCU) return;
+    const payload = {
+        availability: Utils.Store.get('customOnlineStatus', 'status') || 'chat',
+        statusMessage: Utils.Store.get('customOnlineStatus', 'statusMsg') || ''
+    };
+    debugLog('availability', 'PUT /lol-chat/v1/me', payload);
     try {
-        await Utils.LCU.put('/lol-chat/v1/me', {
-            availability: Utils.Store.get('customOnlineStatus', 'status') || 'chat',
-            statusMessage: Utils.Store.get('customOnlineStatus', 'statusMsg') || ''
-        });
-    } catch(e) {}
+        const resp = await Utils.LCU.put('/lol-chat/v1/me', payload);
+        debugLog('availability', 'response', resp);
+    } catch(e) {
+        Utils.Debug.warn('[CustomOnlineStatus][availability] PUT failed', e);
+    }
 }
 
 // Push the desired fake rank badge / challenge crystal / challenge points to /me.
 // challengeCrystalLevel is the challenges system's own Iron-Challenger tier and is
 // independent from rankedLeagueTier (the ranked league badge), so it gets its own setting.
+// Each field group is sent as its own PUT so one rejected/invalid field can't block the others.
 async function syncRankSpoof() {
     if (!Utils.Store.get('customOnlineStatus', 'rankSpoofEnabled') || !Utils.LCU) return;
-    try {
-        await Utils.LCU.put('/lol-chat/v1/me', {
+
+    const groups = [
+        ['rank', {
             lol: {
                 rankedLeagueQueue: Utils.Store.get('customOnlineStatus', 'rankQueue') || '',
                 rankedLeagueTier: Utils.Store.get('customOnlineStatus', 'rankTier') || '',
-                rankedLeagueDivision: Utils.Store.get('customOnlineStatus', 'rankDivision') || '',
-                challengeCrystalLevel: Utils.Store.get('customOnlineStatus', 'challengeCrystalTier') || '',
-                challengePoints: Utils.Store.get('customOnlineStatus', 'challengePoints') || ''
+                rankedLeagueDivision: Utils.Store.get('customOnlineStatus', 'rankDivision') || ''
             }
-        });
-    } catch(e) {}
+        }],
+        ['challengeCrystal', { lol: { challengeCrystalLevel: Utils.Store.get('customOnlineStatus', 'challengeCrystalTier') || '' } }],
+        ['challengePoints', { lol: { challengePoints: Utils.Store.get('customOnlineStatus', 'challengePoints') || '' } }]
+    ];
+
+    for (const [tag, payload] of groups) {
+        debugLog(tag, 'PUT /lol-chat/v1/me sent lol=', payload.lol);
+        try {
+            const resp = await Utils.LCU.put('/lol-chat/v1/me', payload);
+            debugLog(tag, 'echoed back lol=', resp && resp.lol);
+        } catch(e) {
+            Utils.Debug.warn('[CustomOnlineStatus][' + tag + '] PUT failed', e);
+        }
+    }
 }
 
 function toggleRankSpoof(enabled) {
+    debugLog('toggle', 'rankSpoofEnabled -> ' + enabled);
     Utils.Store.set('customOnlineStatus', 'rankSpoofEnabled', enabled);
     if (enabled) syncRankSpoof();
 }
@@ -103,12 +126,14 @@ function installHooks(context) {
         }
 
         if (Utils.Store.get('customOnlineStatus', 'rankSpoofEnabled') && patched.lol && typeof patched.lol === 'object') {
+            debugLog('ws-in', 'incoming lol fields', patched.lol);
             patched = { ...patched, lol: { ...patched.lol } };
             if (patched.lol.rankedLeagueQueue !== undefined) patched.lol.rankedLeagueQueue = Utils.Store.get('customOnlineStatus', 'rankQueue') || '';
             if (patched.lol.rankedLeagueTier !== undefined) patched.lol.rankedLeagueTier = Utils.Store.get('customOnlineStatus', 'rankTier') || '';
             if (patched.lol.rankedLeagueDivision !== undefined) patched.lol.rankedLeagueDivision = Utils.Store.get('customOnlineStatus', 'rankDivision') || '';
             if (patched.lol.challengeCrystalLevel !== undefined) patched.lol.challengeCrystalLevel = Utils.Store.get('customOnlineStatus', 'challengeCrystalTier') || '';
             if (patched.lol.challengePoints !== undefined) patched.lol.challengePoints = Utils.Store.get('customOnlineStatus', 'challengePoints') || '';
+            debugLog('ws-in', 'patched lol fields', patched.lol);
         }
 
         return patched;
@@ -132,11 +157,13 @@ function installHooks(context) {
         }
 
         if (Utils.Store.get('customOnlineStatus', 'rankSpoofEnabled') && parsed.lol && typeof parsed.lol === 'object') {
+            debugLog('xhr-out', 'outgoing lol fields (before)', parsed.lol);
             if (parsed.lol.rankedLeagueQueue !== undefined) { parsed.lol.rankedLeagueQueue = Utils.Store.get('customOnlineStatus', 'rankQueue') || ''; changed = true; }
             if (parsed.lol.rankedLeagueTier !== undefined) { parsed.lol.rankedLeagueTier = Utils.Store.get('customOnlineStatus', 'rankTier') || ''; changed = true; }
             if (parsed.lol.rankedLeagueDivision !== undefined) { parsed.lol.rankedLeagueDivision = Utils.Store.get('customOnlineStatus', 'rankDivision') || ''; changed = true; }
             if (parsed.lol.challengeCrystalLevel !== undefined) { parsed.lol.challengeCrystalLevel = Utils.Store.get('customOnlineStatus', 'challengeCrystalTier') || ''; changed = true; }
             if (parsed.lol.challengePoints !== undefined) { parsed.lol.challengePoints = Utils.Store.get('customOnlineStatus', 'challengePoints') || ''; changed = true; }
+            debugLog('xhr-out', 'outgoing lol fields (after)', parsed.lol);
         }
 
         return changed ? JSON.stringify(parsed) : body;
@@ -258,6 +285,25 @@ function getStatusMenu() {
     return statusMenu;
 }
 
+// Plain 'textarea' settings have no visible label - once text is typed the
+// placeholder (the only clue to what the field is) disappears. Render a small
+// header above the textarea instead.
+function renderLabeledTextarea(row, { label, storeKey, placeholder, onChange }) {
+    const title = document.createElement('div');
+    title.className = 'pm-label-title';
+    title.style.marginBottom = '8px';
+    title.textContent = label;
+    row.appendChild(title);
+
+    const input = document.createElement('textarea');
+    input.placeholder = placeholder || '';
+    Object.assign(input.style, { background: '#111', color: '#f0e6d2', border: '1px solid #3e2e13', padding: '10px 14px', borderRadius: '4px', outline: 'none', boxSizing: 'border-box', width: '100%', minHeight: '60px', resize: 'vertical', fontFamily: 'inherit', fontSize: '14px' });
+    input.value = Utils.Store.get('customOnlineStatus', storeKey) || '';
+    input.addEventListener('change', (e) => onChange(e.target.value));
+    input.addEventListener('click', (ev) => ev.stopPropagation());
+    row.appendChild(input);
+}
+
 function toggleFeature(enabled) {
     isEnabled = enabled;
     Utils.Store.set('customOnlineStatus', 'enabled', enabled);
@@ -319,22 +365,25 @@ export function init(context) {
                     }
                 },
                 {
-                    type: 'textarea',
-                    id: 'sm:customStatusMsg',
-                    placeholder: 'Custom Status Message...',
-                    value: Utils.Store.get('customOnlineStatus', 'statusMsg') || '',
-                    onChange: async (val) => {
-                        Utils.Store.set('customOnlineStatus', 'statusMsg', val);
-                        if(Utils.Store.get('customOnlineStatus', 'enabled') && Utils.LCU) {
-                            await Utils.LCU.put('/lol-chat/v1/me', { statusMessage: val });
+                    type: 'custom',
+                    render: (row) => renderLabeledTextarea(row, {
+                        label: 'Custom Status Message',
+                        storeKey: 'statusMsg',
+                        placeholder: 'Custom Status Message...',
+                        onChange: async (val) => {
+                            Utils.Store.set('customOnlineStatus', 'statusMsg', val);
+                            if(Utils.Store.get('customOnlineStatus', 'enabled') && Utils.LCU) {
+                                await Utils.LCU.put('/lol-chat/v1/me', { statusMessage: val });
+                            }
                         }
-                    }
+                    })
                 },
                 {
                     type: 'toggle',
                     id: 'sm:rankSpoofEnabled',
                     label: 'Enable Fake Rank & Challenge Points',
                     description: 'Overrides the ranked badge, challenge crystal, and challenge points shown on your profile card and in the friends list. Cosmetic only: does not touch your real ranked stats.',
+                    warning: 'Grey area: broadcasts fake presence data (rank, challenges) to your friends and your own client via a live LCU write. Purely cosmetic (no real stats change), but it is API tampering, not just a UI tweak.',
                     value: Utils.Store.get('customOnlineStatus', 'rankSpoofEnabled') || false,
                     onChange: (val) => toggleRankSpoof(val)
                 },
@@ -379,14 +428,16 @@ export function init(context) {
                     }
                 },
                 {
-                    type: 'textarea',
-                    id: 'sm:challengePoints',
-                    placeholder: 'Challenge Points (any text)...',
-                    value: Utils.Store.get('customOnlineStatus', 'challengePoints') || '',
-                    onChange: async (val) => {
-                        Utils.Store.set('customOnlineStatus', 'challengePoints', val);
-                        await syncRankSpoof();
-                    }
+                    type: 'custom',
+                    render: (row) => renderLabeledTextarea(row, {
+                        label: 'Challenge Points',
+                        storeKey: 'challengePoints',
+                        placeholder: 'Challenge Points (any text)...',
+                        onChange: async (val) => {
+                            Utils.Store.set('customOnlineStatus', 'challengePoints', val);
+                            await syncRankSpoof();
+                        }
+                    })
                 }
             ]
         });
@@ -425,6 +476,10 @@ export function init(context) {
             const textRow = document.createElement("div");
             textRow.classList.add("plugins-settings-row");
             textRow.style.marginTop = "10px";
+            const statusLabel = document.createElement('div');
+            statusLabel.textContent = 'Custom Status Message';
+            Object.assign(statusLabel.style, { color: '#f0e6d2', fontSize: '13px', fontWeight: '700', marginBottom: '8px' });
+            textRow.appendChild(statusLabel);
             const statusInput = document.createElement('textarea');
             statusInput.placeholder = 'Custom Status Message...';
             Object.assign(statusInput.style, { background: '#111', color: '#f0e6d2', border: '1px solid #3e2e13', padding: '6px 10px', borderRadius: '2px', outline: 'none', boxSizing: 'border-box', width: '100%', minHeight: '60px', resize: 'vertical', fontFamily: 'inherit', fontSize: '13px' });
@@ -439,7 +494,7 @@ export function init(context) {
             plugin.appendChild(textRow);
 
             // Native UI Fallback for fake rank / challenge points
-            plugin.appendChild(Utils.Settings.createToggleRow("Enable Fake Rank & Challenge Points", Utils.Store.get('customOnlineStatus', 'rankSpoofEnabled') || false, async (next) => {
+            plugin.appendChild(Utils.Settings.createToggleRow("[!] Enable Fake Rank & Challenge Points (grey area - broadcasts fake presence data)", Utils.Store.get('customOnlineStatus', 'rankSpoofEnabled') || false, async (next) => {
                 toggleRankSpoof(next);
             }));
 
@@ -471,6 +526,10 @@ export function init(context) {
             const challengePointsRow = document.createElement("div");
             challengePointsRow.classList.add("plugins-settings-row");
             challengePointsRow.style.marginTop = "10px";
+            const challengePointsLabel = document.createElement('div');
+            challengePointsLabel.textContent = 'Challenge Points';
+            Object.assign(challengePointsLabel.style, { color: '#f0e6d2', fontSize: '13px', fontWeight: '700', marginBottom: '8px' });
+            challengePointsRow.appendChild(challengePointsLabel);
             const challengePointsInput = document.createElement('textarea');
             challengePointsInput.placeholder = 'Challenge Points (any text)...';
             Object.assign(challengePointsInput.style, { background: '#111', color: '#f0e6d2', border: '1px solid #3e2e13', padding: '6px 10px', borderRadius: '2px', outline: 'none', boxSizing: 'border-box', width: '100%', minHeight: '40px', resize: 'vertical', fontFamily: 'inherit', fontSize: '13px' });
