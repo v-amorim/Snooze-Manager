@@ -300,10 +300,38 @@ const Modal = (function() {
     const searchBtn = document.createElement('button');
     searchBtn.className = 'pm-btn';
     searchBtn.textContent = 'Search';
-    
+
+    const meBtn = document.createElement('button');
+    meBtn.className = 'pm-btn';
+    meBtn.textContent = 'Me';
+    meBtn.title = 'Look up your own match history';
+
     const resultDiv = document.createElement('div');
     resultDiv.style.marginTop = '16px';
     resultDiv.style.fontSize = '14px';
+
+    meBtn.addEventListener('click', async () => {
+      resultDiv.innerHTML = '<div style="color:#c8aa6e">Looking up your account...</div>';
+      try {
+        const me = await Utils.LCU.get('/lol-summoner/v1/current-summoner').catch(() => null);
+        if (!me || !me.puuid) {
+          resultDiv.innerHTML = '<div style="color:#d92323">Could not find your account</div>';
+          return;
+        }
+        const gameName = me.gameName || me.displayName || '';
+        const tagLine = me.tagLine || '';
+        const full = await Utils.LCU.get('/lol-summoner/v2/summoners/puuid/' + me.puuid).catch(() => null);
+        const finalPlayer = { ...me, ...(full || {}), gameName, tagLine };
+
+        resultDiv.innerHTML = '<div style="color:#0ac8b9">Loading Match History...</div>';
+        import('./modules/gameAnalysisPopup.js').then(mod => {
+          mod.MatchHistoryModal.show(finalPlayer, '', null);
+        });
+        setTimeout(() => { resultDiv.innerHTML = ''; }, 1000);
+      } catch (e) {
+        resultDiv.innerHTML = '<div style="color:#d92323">Error looking up your account</div>';
+      }
+    });
 
     searchBtn.addEventListener('click', async () => {
       const input = searchInput.value.trim();
@@ -363,6 +391,7 @@ const Modal = (function() {
     searchRow.appendChild(regionSelect);
     searchRow.appendChild(searchInput);
     searchRow.appendChild(searchBtn);
+    searchRow.appendChild(meBtn);
     lookupContent.appendChild(searchRow);
     lookupContent.appendChild(resultDiv);
     content.appendChild(lookupContent);

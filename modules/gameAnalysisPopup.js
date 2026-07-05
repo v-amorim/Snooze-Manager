@@ -1318,29 +1318,34 @@ function computePerformanceScores(participants, gameDuration) {
     const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
     const std  = Math.sqrt(vals.reduce((a, v) => a + (v - mean) ** 2, 0) / vals.length) || 1e-6;
 
-    const sorted   = [...composites].sort((a, b) => b.composite - a.composite);
+    const compositesWithScore = composites.map(c => {
+        const z   = (c.composite - mean) / std;
+        let score = 5.5 + z * 1.5 + (c.win ? 0.5 : -0.5);
+        score     = Math.max(1.0, Math.min(10.0, Math.round(score * 10) / 10));
+        return { ...c, _score: score, _z: z };
+    });
+
+    const sorted   = [...compositesWithScore].sort((a, b) => b.composite - a.composite);
     const mvpPuuid = sorted.find(c =>  c.win)?.puuid;
     const acePuuid = sorted.find(c => !c.win)?.puuid;
+
+    const ranked   = [...compositesWithScore].sort((a, b) => b._score - a._score);
 
     const scoresMap  = {};
     const debugTable = [];
 
-    sorted.forEach((c, idx) => {
-        const z   = (c.composite - mean) / std;
-        let score = 5.5 + z * 1.5 + (c.win ? 0.5 : -0.5);
-        score     = Math.max(1.0, Math.min(10.0, Math.round(score * 10) / 10));
-
+    ranked.forEach((c, idx) => {
         scoresMap[c.puuid] = {
-            score:  score.toFixed(1),
+            score:  c._score.toFixed(1),
             rank:   idx + 1,
             isMvp:  c.puuid === mvpPuuid,
             isAce:  c.puuid === acePuuid
         };
 
         debugTable.push({
-            rank: idx + 1, score: score.toFixed(1), win: c.win,
+            rank: idx + 1, score: c._score.toFixed(1), win: c.win,
             ...c._raw, ...c._inputs,
-            composite: +c.composite.toFixed(4), z: +z.toFixed(3)
+            composite: +c.composite.toFixed(4), z: +c._z.toFixed(3)
         });
     });
 
