@@ -772,6 +772,10 @@ function renderStatsElements(el, statsData, premadeColor) {
                     
                     const el = this.element;
 
+                    if (!Utils.Store.get('gameAnalysisPopup', 'enabled') && !isChampSelectStatsEnabled) {
+                        return;
+                    }
+
                     // Helper to dynamically extract the unique identifier from the active Ember component context
                     const getPlayerId = () => {
                         const paths = [
