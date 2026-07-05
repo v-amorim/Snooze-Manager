@@ -136,7 +136,7 @@ const Modal = (function() {
       .pm-tooltip { position: fixed; z-index: 2147483647; max-width: 260px; padding: 10px 12px; background: rgba(1, 10, 19, 0.95); border: 1px solid rgba(200, 170, 110, 0.35); border-radius: 8px; color: #f0e6d2; font-size: 12px; line-height: 1.4; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6); backdrop-filter: blur(25px) saturate(140%); pointer-events: none; opacity: 0; transition: opacity 0.15s ease; }
       .pm-tooltip.pm-show { opacity: 1; }
       .pm-tooltip.pm-tooltip-warning { border-color: rgba(228, 148, 41, 0.55); }
-      .pm-content { flex: 1; padding: 24px; overflow-y: auto; position: relative; }
+      .pm-content { flex: 1; padding: 18px; overflow-y: auto; position: relative; }
       .pm-tab-content { display: none; animation: fadeIn 0.2s ease-in-out; }
       .pm-tab-content.active { display: block; }
       @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
@@ -144,7 +144,7 @@ const Modal = (function() {
       .pm-search { display: flex; gap: 8px; margin-bottom: 12px; }
       .pm-input { flex: 1; background: #111; border: 1px solid #3e2e13; color: #f0e6d2; padding: 8px 14px; border-radius: 2px; outline: none; font-size: 13px; transition: border-color 0.2s, background-color 0.2s; }
       .pm-input:focus { border-color: #c8aa6e; background: rgba(0, 0, 0, 0.5); }
-      .pm-btn { background: rgba(200, 170, 110, 0.08); border: 1px solid rgba(200, 170, 110, 0.25); color: #c8aa6e; padding: 8px 20px; cursor: pointer; border-radius: 2px; font-weight: bold; transition: all 0.2s ease; font-size: 13px; }
+      .pm-btn { background: rgba(200, 170, 110, 0.08); border: 1px solid rgba(200, 170, 110, 0.25); color: #c8aa6e; padding: 8px 10px; cursor: pointer; border-radius: 2px; font-weight: bold; transition: all 0.2s ease; font-size: 13px; }
       .pm-btn:hover { background: rgba(200, 170, 110, 0.16); color: #f0e6d2; border-color: #c8aa6e; }
       .pm-row { display: flex; justify-content: space-between; align-items: center; padding: 16px; background: rgba(255, 255, 255, 0.015); border: 1px solid rgba(255, 255, 255, 0.03); margin-bottom: 10px; border-radius: 8px; transition: all 0.2s ease; }
       .pm-row:hover { background: rgba(255, 255, 255, 0.04); border-color: rgba(200, 170, 110, 0.15); }
