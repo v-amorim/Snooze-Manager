@@ -2,7 +2,7 @@
  * @name Snooze-customOnlineStatus
  * @version 1.0.0
  * @author SnoozeFest - github@ReformedDoge
- * @description Adds custom chat availability and status message controls.
+ * @description Adds custom chat availability, status message, and fake ranked badge/challenge points controls.
  * @link https://github.com/ReformedDoge
  */
 import Utils from './generalUtils.js';
@@ -11,6 +11,39 @@ let isEnabled = false;
 let statusMenu = null;
 let statusMsgInput = null;
 let documentClickHandlerAttached = false;
+
+const RANK_QUEUE_OPTIONS = [
+    { value: '', label: 'None' },
+    { value: 'RANKED_SOLO_5x5', label: 'Solo/Duo' },
+    { value: 'RANKED_FLEX_SR', label: 'Flex 5v5' },
+    { value: 'RANKED_FLEX_TT', label: 'Flex 3v3' },
+    { value: 'RANKED_TFT', label: 'TFT' },
+    { value: 'RANKED_TFT_TURBO', label: 'Hyper Roll' },
+    { value: 'RANKED_TFT_DOUBLE_UP', label: 'Double Up' },
+    { value: 'CHERRY', label: 'Arena' }
+];
+
+const RANK_TIER_OPTIONS = [
+    { value: '', label: 'Unranked' },
+    { value: 'IRON', label: 'Iron' },
+    { value: 'BRONZE', label: 'Bronze' },
+    { value: 'SILVER', label: 'Silver' },
+    { value: 'GOLD', label: 'Gold' },
+    { value: 'PLATINUM', label: 'Platinum' },
+    { value: 'EMERALD', label: 'Emerald' },
+    { value: 'DIAMOND', label: 'Diamond' },
+    { value: 'MASTER', label: 'Master' },
+    { value: 'GRANDMASTER', label: 'Grandmaster' },
+    { value: 'CHALLENGER', label: 'Challenger' }
+];
+
+const RANK_DIVISION_OPTIONS = [
+    { value: '', label: 'None' },
+    { value: 'I', label: 'I' },
+    { value: 'II', label: 'II' },
+    { value: 'III', label: 'III' },
+    { value: 'IV', label: 'IV' }
+];
 
 // Push the desired status to /me
 async function syncAvailability() {
@@ -23,6 +56,29 @@ async function syncAvailability() {
     } catch(e) {}
 }
 
+// Push the desired fake rank badge / challenge crystal / challenge points to /me.
+// challengeCrystalLevel is the challenges system's own Iron-Challenger tier and is
+// independent from rankedLeagueTier (the ranked league badge), so it gets its own setting.
+async function syncRankSpoof() {
+    if (!Utils.Store.get('customOnlineStatus', 'rankSpoofEnabled') || !Utils.LCU) return;
+    try {
+        await Utils.LCU.put('/lol-chat/v1/me', {
+            lol: {
+                rankedLeagueQueue: Utils.Store.get('customOnlineStatus', 'rankQueue') || '',
+                rankedLeagueTier: Utils.Store.get('customOnlineStatus', 'rankTier') || '',
+                rankedLeagueDivision: Utils.Store.get('customOnlineStatus', 'rankDivision') || '',
+                challengeCrystalLevel: Utils.Store.get('customOnlineStatus', 'challengeCrystalTier') || '',
+                challengePoints: Utils.Store.get('customOnlineStatus', 'challengePoints') || ''
+            }
+        });
+    } catch(e) {}
+}
+
+function toggleRankSpoof(enabled) {
+    Utils.Store.set('customOnlineStatus', 'rankSpoofEnabled', enabled);
+    if (enabled) syncRankSpoof();
+}
+
 // Install WS + XHR hooks so the status stays locked even when the client resets it.
 // Called once from init(). safe to call multiple times (hooks are registered once).
 let _hooksInstalled = false;
@@ -31,38 +87,59 @@ function installHooks(context) {
     if (_hooksInstalled) return;
     _hooksInstalled = true;
 
-    // Inbound WS hook 
-    // Intercept server push of /lol-chat/v1/me to lock status UI.
+    // Inbound WS hook
+    // Intercept server push of /lol-chat/v1/me to lock status UI + fake rank/challenges.
     Utils.Hooks.WS.install(context);
     Utils.Hooks.WS.hook('/lol-chat/v1/me', (endpoint, payload) => {
-        if (!isEnabled) return payload;
         if (!payload || typeof payload !== 'object') return payload;
+        let patched = payload;
 
-        const desired = Utils.Store.get('customOnlineStatus', 'status') || 'chat';
-        const desiredMsg = Utils.Store.get('customOnlineStatus', 'statusMsg') || '';
+        if (isEnabled) {
+            const desired = Utils.Store.get('customOnlineStatus', 'status') || 'chat';
+            const desiredMsg = Utils.Store.get('customOnlineStatus', 'statusMsg') || '';
+            patched = { ...patched };
+            if (patched.availability !== undefined) patched.availability = desired;
+            if (patched.statusMessage !== undefined) patched.statusMessage = desiredMsg;
+        }
 
-        const patched = { ...payload };
-        if (patched.availability !== undefined) patched.availability = desired;
-        if (patched.statusMessage !== undefined) patched.statusMessage = desiredMsg;
+        if (Utils.Store.get('customOnlineStatus', 'rankSpoofEnabled') && patched.lol && typeof patched.lol === 'object') {
+            patched = { ...patched, lol: { ...patched.lol } };
+            if (patched.lol.rankedLeagueQueue !== undefined) patched.lol.rankedLeagueQueue = Utils.Store.get('customOnlineStatus', 'rankQueue') || '';
+            if (patched.lol.rankedLeagueTier !== undefined) patched.lol.rankedLeagueTier = Utils.Store.get('customOnlineStatus', 'rankTier') || '';
+            if (patched.lol.rankedLeagueDivision !== undefined) patched.lol.rankedLeagueDivision = Utils.Store.get('customOnlineStatus', 'rankDivision') || '';
+            if (patched.lol.challengeCrystalLevel !== undefined) patched.lol.challengeCrystalLevel = Utils.Store.get('customOnlineStatus', 'challengeCrystalTier') || '';
+            if (patched.lol.challengePoints !== undefined) patched.lol.challengePoints = Utils.Store.get('customOnlineStatus', 'challengePoints') || '';
+        }
+
         return patched;
     });
 
-    // Outbound XHR hook 
+    // Outbound XHR hook
     // When the client sends a PUT /lol-chat/v1/me (e.g. entering lobby, post-game),
-    // rewrite the body to keep our desired availability & statusMessage.
+    // rewrite the body to keep our desired availability/statusMessage and fake rank/challenges.
     Utils.Hooks.Xhr.hookReq('/lol-chat/v1/me', (method, url, xhr, body) => {
         if (method !== 'PUT' && method !== 'put') return body;
-        if (!isEnabled) return body;
 
         let parsed;
         try { parsed = JSON.parse(body); } catch { return body; }
+        let changed = false;
 
-        const desired = Utils.Store.get('customOnlineStatus', 'status') || 'chat';
-        const desiredMsg = Utils.Store.get('customOnlineStatus', 'statusMsg') || '';
+        if (isEnabled) {
+            const desired = Utils.Store.get('customOnlineStatus', 'status') || 'chat';
+            const desiredMsg = Utils.Store.get('customOnlineStatus', 'statusMsg') || '';
+            if (parsed.availability !== undefined) { parsed.availability = desired; changed = true; }
+            if (parsed.statusMessage !== undefined) { parsed.statusMessage = desiredMsg; changed = true; }
+        }
 
-        if (parsed.availability !== undefined) parsed.availability = desired;
-        if (parsed.statusMessage !== undefined) parsed.statusMessage = desiredMsg;
-        return JSON.stringify(parsed);
+        if (Utils.Store.get('customOnlineStatus', 'rankSpoofEnabled') && parsed.lol && typeof parsed.lol === 'object') {
+            if (parsed.lol.rankedLeagueQueue !== undefined) { parsed.lol.rankedLeagueQueue = Utils.Store.get('customOnlineStatus', 'rankQueue') || ''; changed = true; }
+            if (parsed.lol.rankedLeagueTier !== undefined) { parsed.lol.rankedLeagueTier = Utils.Store.get('customOnlineStatus', 'rankTier') || ''; changed = true; }
+            if (parsed.lol.rankedLeagueDivision !== undefined) { parsed.lol.rankedLeagueDivision = Utils.Store.get('customOnlineStatus', 'rankDivision') || ''; changed = true; }
+            if (parsed.lol.challengeCrystalLevel !== undefined) { parsed.lol.challengeCrystalLevel = Utils.Store.get('customOnlineStatus', 'challengeCrystalTier') || ''; changed = true; }
+            if (parsed.lol.challengePoints !== undefined) { parsed.lol.challengePoints = Utils.Store.get('customOnlineStatus', 'challengePoints') || ''; changed = true; }
+        }
+
+        return changed ? JSON.stringify(parsed) : body;
     });
 }
 
@@ -213,7 +290,7 @@ export function init(context) {
             id: 'customOnlineStatus',
             category: 'Profile & Social',
             name: 'Custom Online Status',
-            description: 'Overrides your online status indicator. Menu available directly on your profile avatar in the client.',
+            description: 'Overrides your online status indicator and fake ranked badge/challenge points. Menu available directly on your profile avatar in the client.',
             settings: [
                 {
                     type: 'toggle',
@@ -251,6 +328,64 @@ export function init(context) {
                         if(Utils.Store.get('customOnlineStatus', 'enabled') && Utils.LCU) {
                             await Utils.LCU.put('/lol-chat/v1/me', { statusMessage: val });
                         }
+                    }
+                },
+                {
+                    type: 'toggle',
+                    id: 'sm:rankSpoofEnabled',
+                    label: 'Enable Fake Rank & Challenge Points',
+                    description: 'Overrides the ranked badge, challenge crystal, and challenge points shown on your profile card and in the friends list. Cosmetic only: does not touch your real ranked stats.',
+                    value: Utils.Store.get('customOnlineStatus', 'rankSpoofEnabled') || false,
+                    onChange: (val) => toggleRankSpoof(val)
+                },
+                {
+                    type: 'select',
+                    id: 'sm:rankQueue',
+                    value: Utils.Store.get('customOnlineStatus', 'rankQueue') || '',
+                    options: RANK_QUEUE_OPTIONS,
+                    onChange: async (val) => {
+                        Utils.Store.set('customOnlineStatus', 'rankQueue', val);
+                        await syncRankSpoof();
+                    }
+                },
+                {
+                    type: 'select',
+                    id: 'sm:rankTier',
+                    value: Utils.Store.get('customOnlineStatus', 'rankTier') || '',
+                    options: RANK_TIER_OPTIONS,
+                    onChange: async (val) => {
+                        Utils.Store.set('customOnlineStatus', 'rankTier', val);
+                        await syncRankSpoof();
+                    }
+                },
+                {
+                    type: 'select',
+                    id: 'sm:rankDivision',
+                    value: Utils.Store.get('customOnlineStatus', 'rankDivision') || '',
+                    options: RANK_DIVISION_OPTIONS,
+                    onChange: async (val) => {
+                        Utils.Store.set('customOnlineStatus', 'rankDivision', val);
+                        await syncRankSpoof();
+                    }
+                },
+                {
+                    type: 'select',
+                    id: 'sm:challengeCrystalTier',
+                    value: Utils.Store.get('customOnlineStatus', 'challengeCrystalTier') || '',
+                    options: RANK_TIER_OPTIONS,
+                    onChange: async (val) => {
+                        Utils.Store.set('customOnlineStatus', 'challengeCrystalTier', val);
+                        await syncRankSpoof();
+                    }
+                },
+                {
+                    type: 'textarea',
+                    id: 'sm:challengePoints',
+                    placeholder: 'Challenge Points (any text)...',
+                    value: Utils.Store.get('customOnlineStatus', 'challengePoints') || '',
+                    onChange: async (val) => {
+                        Utils.Store.set('customOnlineStatus', 'challengePoints', val);
+                        await syncRankSpoof();
                     }
                 }
             ]
@@ -302,6 +437,50 @@ export function init(context) {
             });
             textRow.appendChild(statusInput);
             plugin.appendChild(textRow);
+
+            // Native UI Fallback for fake rank / challenge points
+            plugin.appendChild(Utils.Settings.createToggleRow("Enable Fake Rank & Challenge Points", Utils.Store.get('customOnlineStatus', 'rankSpoofEnabled') || false, async (next) => {
+                toggleRankSpoof(next);
+            }));
+
+            const buildNativeSelectRow = (options, storeKey) => {
+                const row = document.createElement("div");
+                row.classList.add("plugins-settings-row");
+                row.style.marginTop = "10px";
+                const select = document.createElement("select");
+                Object.assign(select.style, { background: '#111', color: '#f0e6d2', border: '1px solid #3e2e13', padding: '6px', borderRadius: '2px', outline: 'none', width: '100%' });
+                options.forEach(o => {
+                    const opt = document.createElement('option');
+                    opt.value = o.value; opt.textContent = o.label;
+                    select.appendChild(opt);
+                });
+                select.value = Utils.Store.get('customOnlineStatus', storeKey) || '';
+                select.addEventListener('change', async (e) => {
+                    Utils.Store.set('customOnlineStatus', storeKey, e.target.value);
+                    await syncRankSpoof();
+                });
+                row.appendChild(select);
+                return row;
+            };
+
+            plugin.appendChild(buildNativeSelectRow(RANK_QUEUE_OPTIONS, 'rankQueue'));
+            plugin.appendChild(buildNativeSelectRow(RANK_TIER_OPTIONS, 'rankTier'));
+            plugin.appendChild(buildNativeSelectRow(RANK_DIVISION_OPTIONS, 'rankDivision'));
+            plugin.appendChild(buildNativeSelectRow(RANK_TIER_OPTIONS, 'challengeCrystalTier'));
+
+            const challengePointsRow = document.createElement("div");
+            challengePointsRow.classList.add("plugins-settings-row");
+            challengePointsRow.style.marginTop = "10px";
+            const challengePointsInput = document.createElement('textarea');
+            challengePointsInput.placeholder = 'Challenge Points (any text)...';
+            Object.assign(challengePointsInput.style, { background: '#111', color: '#f0e6d2', border: '1px solid #3e2e13', padding: '6px 10px', borderRadius: '2px', outline: 'none', boxSizing: 'border-box', width: '100%', minHeight: '40px', resize: 'vertical', fontFamily: 'inherit', fontSize: '13px' });
+            challengePointsInput.value = Utils.Store.get('customOnlineStatus', 'challengePoints') || '';
+            challengePointsInput.addEventListener('change', async (e) => {
+                Utils.Store.set('customOnlineStatus', 'challengePoints', e.target.value);
+                await syncRankSpoof();
+            });
+            challengePointsRow.appendChild(challengePointsInput);
+            plugin.appendChild(challengePointsRow);
         });
     }
 
@@ -320,6 +499,7 @@ export function load() {
 
     installEmberHook();
 
-    // Apply saved status to the server on load
+    // Apply saved status and rank/challenge spoof to the server on load
     syncAvailability();
+    syncRankSpoof();
 }
