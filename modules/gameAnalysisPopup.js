@@ -210,6 +210,9 @@ let isPremadeHighlightEnabled = false;
 
 const PREMADE_COLORS = ['#e84057', '#0ac8b9', '#c8aa6e', '#9090f4'];
 const matchHistoryGameIdsCache = new Map();
+let lastGameId = null; // tracks last seen game ID to detect stale gameflow sessions
+let _cachedGfSessionPromise = null;
+let _cachedGfSessionTime = 0;
 
 async function getRecentGameIds(puuid) {
     if (!puuid) return new Map();
@@ -552,11 +555,23 @@ const showGameAnalysis = async () => {
     if (!isEnabled) return;
     Utils.Debug.log('[GameAnalysis] showGameAnalysis started');
     
+    // Invalidate cached gameflow session to ensure a fresh fetch
+    _cachedGfSessionPromise = null;
+    _cachedGfSessionTime = 0;
+
     document.querySelectorAll('.pm-analysis-modal-container').forEach(el => el.remove());
 
     let session;
     try {
         session = await Utils.LCU.get('/lol-gameflow/v1/session');
+        // If the game ID matches the last seen game, the session is stale — retry once.
+        const gid = session?.gameData?.gameId;
+        if (gid && gid === lastGameId) {
+            Utils.Debug.log('[GameAnalysis] Stale gameflow session detected. Retrying in 500ms...');
+            await new Promise(r => setTimeout(r, 500));
+            session = await Utils.LCU.get('/lol-gameflow/v1/session');
+        }
+        lastGameId = session?.gameData?.gameId || lastGameId;
     } catch(e) {
       Utils.Debug.error('[GameAnalysis] Failed to get session', e);
       session = null;
@@ -661,6 +676,10 @@ function handleGameAnalysisPhase(phase) {
     const isNowChampSelect = phase === 'ChampSelect';
     if (wasInChampSelect !== isNowChampSelect) {
         clearLobbyCache();
+        // When leaving ChampSelect, clean dom
+        if (wasInChampSelect && !isNowChampSelect) {
+            document.querySelectorAll('.pm-cs-stats-row, .pm-pre-badge, .pm-rank-badge, .pm-champ-select-stats, .pm-cs-stats-wrapper').forEach(n => n.remove());
+        }
     }
     previousPhase = phase;
 
@@ -865,8 +884,6 @@ function getCachedCsSession() {
     return _cachedCsSessionPromise;
 }
 
-let _cachedGfSessionPromise = null;
-let _cachedGfSessionTime = 0;
 function getCachedGfSession() {
     const now = Date.now();
     if (_cachedGfSessionPromise && now - _cachedGfSessionTime < 2000) return _cachedGfSessionPromise;
