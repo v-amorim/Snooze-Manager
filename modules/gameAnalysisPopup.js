@@ -1826,7 +1826,7 @@ export const MatchHistoryModal = (function() {
             zIndex: '1',
             width: '1000px',
             maxWidth: '90vw',
-            height: '80vh',
+            height: '82vh',
             background: 'rgba(1, 10, 19, 0.75)',
             border: '1px solid rgba(200, 170, 110, 0.2)',
             borderRadius: '12px',
@@ -2081,6 +2081,8 @@ export const MatchHistoryModal = (function() {
         const loadingDiv = document.getElementById('pm-history-loading');
         const filterSelect = document.getElementById('pm-history-filter');
 
+        const savedScrollTop = _content.scrollTop;
+
         if (loadingDiv) loadingDiv.style.display = 'none';
         if (filterSelect) filterSelect.style.display = 'none';
         listDiv.style.display = 'none';
@@ -2098,6 +2100,7 @@ export const MatchHistoryModal = (function() {
                 listDiv.style.display = 'flex';
                 if (filterSelect) filterSelect.style.display = 'block';
                 if (loadingDiv && _hasMore) loadingDiv.style.display = 'block';
+                _content.scrollTop = savedScrollTop;
             });
         }
 
@@ -2366,14 +2369,9 @@ export const MatchHistoryModal = (function() {
             if (src) {
               src = src.replace('/lol-game-data/assets/', '/lol-game-data/assets/');
             } else {
-              src = ` / lol - game - data / assets / v1 / perks / $ {
-                id
-            }.png`;
+               src = `/lol-game-data/assets/v1/perks/${id}.png`;
             }
-            return ` < img src = "${src}"
-            style = "width:14px;height:14px;border-radius:50%;border:1px solid #785a28;background:#000;"
-            onerror = "this.style.opacity=0"
-            title = "${safeName}" / > `;
+            return `<img src="${src}" style="width:14px;height:14px;border-radius:50%;border:1px solid #785a28;background:#000;" onerror="this.style.opacity=0" title="${safeName}"/>`;
           }).join('')}
         </div>
       `;
