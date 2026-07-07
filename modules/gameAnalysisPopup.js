@@ -60,16 +60,21 @@ function buildDivisionEntries() {
   }
   return entries;
 }
-const DIVISION_ENTRIES = buildDivisionEntries();
+let _divisionEntries = null;
+function getDivisionEntries() {
+  if (!_divisionEntries) _divisionEntries = buildDivisionEntries();
+  return _divisionEntries;
+}
 
 function divisionScoreToLabel(score) {
   const s = Math.round(score);
-  for (const entry of DIVISION_ENTRIES) {
+  const entries = getDivisionEntries();
+  for (const entry of entries) {
     if (s === entry.score) return entry.label;
   }
   let best = null;
   let bestDist = Infinity;
-  for (const entry of DIVISION_ENTRIES) {
+  for (const entry of entries) {
     const dist = Math.abs(s - entry.score);
     if (dist < bestDist || (dist === bestDist && entry.tierVal > (best?.tierVal ?? 0))) {
       bestDist = dist;
@@ -198,13 +203,6 @@ async function loadAugments() {
     Utils.Debug.error('[GameAnalysis] Failed to load cherry augments:', e);
   }
 }
-
-window._pmShowHistory = (puuid, tag) => {
-    if (!Utils.LCU) return;
-    Utils.LCU.get('/lol-summoner/v2/summoners/puuid/' + puuid).then(player => {
-        if (player) MatchHistoryModal.show(player, tag);
-    }).catch(()=>{});
-};
 
 let isPremadeHighlightEnabled = false;
 
@@ -544,13 +542,6 @@ async function analyzePlayer(p, currentTag, premadeColor) {
     `;
 }
 
-window._pmCloseAnalysisModal = function(btn) {
-  Utils.Debug.log('[GameAnalysis] Close button clicked!');
-    const container = btn.closest('.pm-analysis-modal-container');
-    if (container) container.remove();
-    document.querySelectorAll('.pm-analysis-modal-container').forEach(el => el.remove());
-};
-
 const showGameAnalysis = async () => {
     if (!isEnabled) return;
     Utils.Debug.log('[GameAnalysis] showGameAnalysis started');
@@ -729,6 +720,19 @@ export function init(context) {
     if (isPremadeHighlightEnabled === undefined) isPremadeHighlightEnabled = true;
     isChampSelectStatsEnabled = Utils.Store.get('gameAnalysisPopup', 'champSelectStats') || false;
     includeAllQueues = Utils.Store.get('gameAnalysisPopup', 'includeAllQueues') || false;
+
+    window._pmShowHistory = (puuid, tag) => {
+        if (!Utils.LCU) return;
+        Utils.LCU.get('/lol-summoner/v2/summoners/puuid/' + puuid).then(player => {
+            if (player) MatchHistoryModal.show(player, tag);
+        }).catch(()=>{});
+    };
+    window._pmCloseAnalysisModal = function(btn) {
+      Utils.Debug.log('[GameAnalysis] Close button clicked!');
+        const container = btn.closest('.pm-analysis-modal-container');
+        if (container) container.remove();
+        document.querySelectorAll('.pm-analysis-modal-container').forEach(el => el.remove());
+    };
 
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({

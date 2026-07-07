@@ -19,9 +19,7 @@ function migrateSettings() {
     }
 }
 
-migrateSettings();
-
-let enabled = Utils.Store.get(MODULE_KEY, 'enabled') ?? true;
+let enabled;
 
 let snoozeContext = null;
 let modalManager = null;
@@ -232,6 +230,8 @@ if (typeof window !== 'undefined') {
 export function init(context) {
     snoozeContext = context;
     Utils.Debug.log('[LowPrioWarningSuppress] Initializing module...');
+    migrateSettings();
+    enabled = Utils.Store.get(MODULE_KEY, 'enabled') ?? true;
     
     Utils.Settings.inject(context, {
         name: 'low-prio-warning-suppress-settings',

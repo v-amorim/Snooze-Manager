@@ -869,23 +869,38 @@ const Modal = (function() {
       wrap.appendChild(devSection);
 
       // Module Visibility Section
-      const visSection = makeSettingsSection('Module Visibility', 'Choose which modules appear in the sidebar. Modules with an active toggle are marked with a dot — unlist them to hide, not disable.');
+      const visSection = makeSettingsSection('Module Visibility', 'Choose which modules appear in the sidebar. Modules with an active toggle are marked with a green dot - hidden modules can also be fully disabled so their code never runs (red dot).');
 
       const visDualList = document.createElement('div');
       visDualList.style.cssText = 'display:flex;gap:12px;margin-top:10px;';
 
       function buildVisibilityList() {
+        const _prevScrollTops = [];
+        visDualList.querySelectorAll('div[style*="overflow-y: auto"]').forEach(el => _prevScrollTops.push(el.scrollTop));
         visDualList.innerHTML = '';
 
         const hiddenIds = (() => {
           const v = Utils.Store.get('core', 'hiddenModules');
           return Array.isArray(v) ? new Set(v) : new Set();
         })();
+        const disabledIds = getDisabledModuleIds();
 
-        const visibleMods = registeredModules.filter(m => m.settings && m.settings.length > 0 && !hiddenIds.has(m.id));
-        const hiddenMods  = registeredModules.filter(m => m.settings && m.settings.length > 0 && hiddenIds.has(m.id));
+        disabledIds.forEach(id => {
+          if (!registeredModules.some(m => m.id === id)) {
+            registeredModules.push({
+              id,
+              name: (MODULE_INFO[id] || {}).name || id,
+              description: '',
+              settings: [],
+              __disabledStub: true
+            });
+          }
+        });
 
-        function makeColumn(title, mods, actionLabel, actionClass, onAction) {
+        const visibleMods = registeredModules.filter(m => (m.__disabledStub || (m.settings && m.settings.length > 0)) && !hiddenIds.has(m.id));
+        const hiddenMods  = registeredModules.filter(m => (m.__disabledStub || (m.settings && m.settings.length > 0)) && hiddenIds.has(m.id));
+
+        function makeColumn(title, mods, actions) {
           const col = document.createElement('div');
           col.style.cssText = 'flex:1;display:flex;flex-direction:column;gap:6px;min-width:0;';
 
@@ -907,6 +922,7 @@ const Modal = (function() {
 
           mods.forEach(mod => {
             const enabled = (mod.settings || []).some(s => s.type === 'toggle' && s.value === true);
+            const isDisabled = disabledIds.has(mod.id);
             const item = document.createElement('div');
             item.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:6px;padding:5px 8px;border-radius:4px;background:rgba(255,255,255,0.015);border:1px solid rgba(255,255,255,0.04);transition:background 0.15s;';
             item.onmouseover = () => item.style.background = 'rgba(255,255,255,0.05)';
@@ -915,7 +931,12 @@ const Modal = (function() {
             const nameWrap = document.createElement('div');
             nameWrap.style.cssText = 'display:flex;align-items:center;gap:6px;min-width:0;flex:1;overflow:hidden;';
 
-            if (enabled) {
+            if (isDisabled) {
+              const dot = document.createElement('span');
+              dot.title = 'This module is disabled and will not load until re-enabled and restarted.';
+              dot.style.cssText = 'width:6px;height:6px;border-radius:50%;background:#c84c4c;flex-shrink:0;';
+              nameWrap.appendChild(dot);
+            } else if (enabled) {
               const dot = document.createElement('span');
               dot.title = 'This module has active settings';
               dot.style.cssText = 'width:6px;height:6px;border-radius:50%;background:#0ac8b9;flex-shrink:0;';
@@ -924,19 +945,25 @@ const Modal = (function() {
 
             const nameEl = document.createElement('span');
             nameEl.textContent = mod.name;
-            nameEl.style.cssText = 'font-size:12px;color:#f0e6d2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+            nameEl.style.cssText = 'font-size:12px;color:#f0e6d2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' + (isDisabled ? 'opacity:0.5;' : '');
             nameWrap.appendChild(nameEl);
 
-            const btn = document.createElement('button');
-            btn.textContent = actionLabel;
-            btn.className = actionClass;
-            btn.style.cssText = 'flex-shrink:0;padding:2px 8px;font-size:11px;border-radius:2px;cursor:pointer;border:1px solid rgba(200,170,110,0.3);background:rgba(200,170,110,0.06);color:#c8aa6e;transition:all 0.15s;';
-            btn.onmouseover = () => { btn.style.background = 'rgba(200,170,110,0.15)'; btn.style.color = '#f0e6d2'; };
-            btn.onmouseout  = () => { btn.style.background = 'rgba(200,170,110,0.06)'; btn.style.color = '#c8aa6e'; };
-            btn.addEventListener('click', (e) => { e.stopPropagation(); onAction(mod.id); });
+            const actionsWrap = document.createElement('div');
+            actionsWrap.style.cssText = 'display:flex;gap:4px;flex-shrink:0;';
+
+            actions.forEach(action => {
+              const btn = document.createElement('button');
+              btn.textContent = typeof action.label === 'function' ? action.label(mod) : action.label;
+              btn.className = action.className || '';
+              btn.style.cssText = 'flex-shrink:0;padding:2px 8px;font-size:11px;border-radius:2px;cursor:pointer;border:1px solid rgba(200,170,110,0.3);background:rgba(200,170,110,0.06);color:#c8aa6e;transition:all 0.15s;';
+              btn.onmouseover = () => { btn.style.background = 'rgba(200,170,110,0.15)'; btn.style.color = '#f0e6d2'; };
+              btn.onmouseout  = () => { btn.style.background = 'rgba(200,170,110,0.06)'; btn.style.color = '#c8aa6e'; };
+              btn.addEventListener('click', (e) => { e.stopPropagation(); action.onClick(mod.id); });
+              actionsWrap.appendChild(btn);
+            });
 
             item.appendChild(nameWrap);
-            item.appendChild(btn);
+            item.appendChild(actionsWrap);
             list.appendChild(item);
           });
 
@@ -969,15 +996,51 @@ const Modal = (function() {
           buildVisibilityList();
         }
 
-        const leftCol  = makeColumn('Visible in Menu', visibleMods, 'Hide', 'pm-vis-hide-btn', toggleVisibility);
-        const rightCol = makeColumn('Hidden from Menu', hiddenMods, 'Show', 'pm-vis-show-btn', toggleVisibility);
+        function toggleDisabled(modId) {
+          const current = getDisabledModuleIds();
+          if (current.has(modId)) {
+            current.delete(modId);
+            if (!registeredModules.some(m => m.id === modId)) {
+              registeredModules.push({
+                id: modId,
+                name: (MODULE_INFO[modId] || {}).name || modId,
+                description: '',
+                settings: [],
+              });
+            }
+          } else {
+            current.add(modId);
+          }
+          Utils.Store.set('core', 'disabledModules', [...current]);
+          buildVisibilityList();
+        }
+
+        const leftCol  = makeColumn('Visible in Menu', visibleMods, [
+          { label: 'Hide', className: 'pm-vis-hide-btn', onClick: toggleVisibility }
+        ]);
+        const rightCol = makeColumn('Hidden from Menu', hiddenMods, [
+          { label: (mod) => disabledIds.has(mod.id) ? 'Enable' : 'Disable', onClick: toggleDisabled },
+          { label: 'Show', className: 'pm-vis-show-btn', onClick: toggleVisibility }
+        ]);
 
         visDualList.appendChild(leftCol);
         visDualList.appendChild(rightCol);
+
+        visDualList.querySelectorAll('div[style*="overflow-y: auto"]').forEach((el, i) => {
+          if (_prevScrollTops[i] != null) el.scrollTop = _prevScrollTops[i];
+        });
       }
 
       buildVisibilityList();
       visSection.appendChild(visDualList);
+
+      const _restartDisabledCount = getDisabledModuleIds().size;
+      if (_restartDisabledCount > 0) {
+        const restartNote = document.createElement('div');
+        restartNote.style.cssText = 'font-size:11px;color:#a09b8c;margin-top:8px;padding:6px 10px;border-radius:4px;background:rgba(200,170,110,0.06);border:1px solid rgba(200,170,110,0.15);display:flex;align-items:center;gap:6px;';
+        restartNote.innerHTML = '<span style="color:#c8aa6e;font-weight:700;">!</span> Restart required for module enable/disable changes to take effect.';
+        visSection.appendChild(restartNote);
+      }
 
       wrap.appendChild(visSection);
 
@@ -1390,6 +1453,30 @@ import * as nameSpooferModule from './modules/nameSpoofer.js';
 
 const registeredModules = [];
 
+function getDisabledModuleIds() {
+  const v = Utils.Store.get('core', 'disabledModules');
+  return Array.isArray(v) ? new Set(v) : new Set();
+}
+
+const MODULE_INFO = {
+  autoAccept: { name: 'Auto Accept Match' },
+  aramNocd: { name: 'ARAM No CD' },
+  autoLockChampion: { name: 'Auto Lock Champion' },
+  champSelectQuitButton: { name: 'Champ Select Quit Button' },
+  SnoozeBalanceTooltip: { name: 'Balance Tooltip' },
+  gameAnalysisPopup: { name: 'Game Analysis Popup' },
+  customOnlineStatus: { name: 'Custom Online Status' },
+  clientWindowTweaks: { name: 'Client Window Tweaks' },
+  profileTweaks: { name: 'Profile Tweaks' },
+  autoHonor: { name: 'Auto Honor' },
+  arenaGod: { name: 'Arena God' },
+  socialPanelTweaks: { name: 'Social Panel Tweaks' },
+  whaleHelper: { name: 'Whale Helper' },
+  lowPrioWarningSuppress: { name: 'Low Prio Warning Suppress' },
+  autoQueue: { name: 'Auto Queue' },
+  modeSelectorTweaks: { name: 'Mode Selector Tweaks' },
+  nameSpoofer: { name: 'Name Spoofer' }
+};
 
 
 // Init Lifecycle
@@ -1444,23 +1531,25 @@ export async function init(ctx) {
   }
   };
 
-  autoAcceptModule.init(ctx);
-  aramNocdModule.init(ctx);
-  autoLockChampionModule.init(ctx);
-  champSelectQuitButtonModule.init(ctx);
-  SnoozeBalanceTooltipModule.init(ctx);
-  gameAnalysisPopupModule.init(ctx);
-  customOnlineStatusModule.init(ctx);
-  clientWindowTweaksModule.init(ctx);
-  profileTweaksModule.init(ctx);
-  autoHonorModule.init(ctx);
-  arenaGodModule.init(ctx);
-  socialPanelTweaksModule.init(ctx);
-  whaleHelperModule.init(ctx);
-  lowPrioWarningSuppressModule.init(ctx);
-  autoQueueModule.init(ctx);
-  modeSelectorTweaksModule.init(ctx);
-  nameSpooferModule.init(ctx);
+  const _initDisabledIds = getDisabledModuleIds();
+
+  if (!_initDisabledIds.has('autoAccept')) autoAcceptModule.init(ctx);
+  if (!_initDisabledIds.has('aramNocd')) aramNocdModule.init(ctx);
+  if (!_initDisabledIds.has('autoLockChampion')) autoLockChampionModule.init(ctx);
+  if (!_initDisabledIds.has('champSelectQuitButton')) champSelectQuitButtonModule.init(ctx);
+  if (!_initDisabledIds.has('SnoozeBalanceTooltip')) SnoozeBalanceTooltipModule.init(ctx);
+  if (!_initDisabledIds.has('gameAnalysisPopup')) gameAnalysisPopupModule.init(ctx);
+  if (!_initDisabledIds.has('customOnlineStatus')) customOnlineStatusModule.init(ctx);
+  if (!_initDisabledIds.has('clientWindowTweaks')) clientWindowTweaksModule.init(ctx);
+  if (!_initDisabledIds.has('profileTweaks')) profileTweaksModule.init(ctx);
+  if (!_initDisabledIds.has('autoHonor')) autoHonorModule.init(ctx);
+  if (!_initDisabledIds.has('arenaGod')) arenaGodModule.init(ctx);
+  if (!_initDisabledIds.has('socialPanelTweaks')) socialPanelTweaksModule.init(ctx);
+  if (!_initDisabledIds.has('whaleHelper')) whaleHelperModule.init(ctx);
+  if (!_initDisabledIds.has('lowPrioWarningSuppress')) lowPrioWarningSuppressModule.init(ctx);
+  if (!_initDisabledIds.has('autoQueue')) autoQueueModule.init(ctx);
+  if (!_initDisabledIds.has('modeSelectorTweaks')) modeSelectorTweaksModule.init(ctx);
+  if (!_initDisabledIds.has('nameSpoofer')) nameSpooferModule.init(ctx);
 }
 
 export async function load(context) {
@@ -1479,24 +1568,25 @@ export async function load(context) {
   WelcomeModal.showIfNeeded();
   checkForUpdates();
 
-  
-  autoAcceptModule.load();
-  aramNocdModule.load();
-  autoLockChampionModule.load();
-  champSelectQuitButtonModule.load();
-  SnoozeBalanceTooltipModule.load();
-  gameAnalysisPopupModule.load();
-  customOnlineStatusModule.load();
-  clientWindowTweaksModule.load();
-  profileTweaksModule.load();
-  autoHonorModule.load();
-  arenaGodModule.load();
-  socialPanelTweaksModule.load();
-  whaleHelperModule.load();
-  lowPrioWarningSuppressModule.load();
-  autoQueueModule.load();
-  modeSelectorTweaksModule.load();
-  nameSpooferModule.load();
+  const _disabledIds = getDisabledModuleIds();
+
+  if (!_disabledIds.has('autoAccept')) autoAcceptModule.load();
+  if (!_disabledIds.has('aramNocd')) aramNocdModule.load();
+  if (!_disabledIds.has('autoLockChampion')) autoLockChampionModule.load();
+  if (!_disabledIds.has('champSelectQuitButton')) champSelectQuitButtonModule.load();
+  if (!_disabledIds.has('SnoozeBalanceTooltip')) SnoozeBalanceTooltipModule.load();
+  if (!_disabledIds.has('gameAnalysisPopup')) gameAnalysisPopupModule.load();
+  if (!_disabledIds.has('customOnlineStatus')) customOnlineStatusModule.load();
+  if (!_disabledIds.has('clientWindowTweaks')) clientWindowTweaksModule.load();
+  if (!_disabledIds.has('profileTweaks')) profileTweaksModule.load();
+  if (!_disabledIds.has('autoHonor')) autoHonorModule.load();
+  if (!_disabledIds.has('arenaGod')) arenaGodModule.load();
+  if (!_disabledIds.has('socialPanelTweaks')) socialPanelTweaksModule.load();
+  if (!_disabledIds.has('whaleHelper')) whaleHelperModule.load();
+  if (!_disabledIds.has('lowPrioWarningSuppress')) lowPrioWarningSuppressModule.load();
+  if (!_disabledIds.has('autoQueue')) autoQueueModule.load();
+  if (!_disabledIds.has('modeSelectorTweaks')) modeSelectorTweaksModule.load();
+  if (!_disabledIds.has('nameSpoofer')) nameSpooferModule.load();
 }
 
 const LEGACY_MIGRATION_MAP = {
