@@ -86,6 +86,7 @@ let isPremadeHighlightEnabled = false;
 
 const PREMADE_COLORS = ['#e84057', '#0ac8b9', '#c8aa6e', '#9090f4'];
 const matchHistoryGameIdsCache = new Map();
+let lastGameId = null; // tracks last seen game ID to detect stale gameflow sessions
 
 async function getRecentGameIds(puuid) {
     if (!puuid) return new Map();
@@ -331,12 +332,24 @@ window._pmCloseAnalysisModal = function(btn) {
 const showGameAnalysis = async () => {
     if (!isEnabled) return;
     Utils.Debug.log('[GameAnalysis] showGameAnalysis started');
-    
+
+    // Invalidate cached gameflow session to ensure a fresh fetch
+    _cachedGfSessionPromise = null;
+    _cachedGfSessionTime = 0;
+
     document.querySelectorAll('.pm-analysis-modal-container').forEach(el => el.remove());
 
     let session;
     try {
         session = await Utils.LCU.get('/lol-gameflow/v1/session');
+        // If the game ID matches the last seen game, the session is stale — retry once.
+        const gid = session?.gameData?.gameId;
+        if (gid && gid === lastGameId) {
+            Utils.Debug.log('[GameAnalysis] Stale gameflow session detected. Retrying in 500ms...');
+            await new Promise(r => setTimeout(r, 500));
+            session = await Utils.LCU.get('/lol-gameflow/v1/session');
+        }
+        lastGameId = session?.gameData?.gameId || lastGameId;
     } catch(e) {
       Utils.Debug.error('[GameAnalysis] Failed to get session', e);
       session = null;
@@ -1535,17 +1548,19 @@ export const MatchHistoryModal = (function() {
     const detailDiv = document.getElementById('pm-history-detail');
     const loadingDiv = document.getElementById('pm-history-loading');
     const filterSelect = document.getElementById('pm-history-filter');
-    
+
+    const savedScrollTop = _content.scrollTop;
+
     if (loadingDiv) loadingDiv.style.display = 'none';
     if (filterSelect) filterSelect.style.display = 'none';
     listDiv.style.display = 'none';
-    
+
     detailDiv.innerHTML = '';
     detailDiv.style.display = 'flex';
-    
+
     detailDiv.innerHTML = buildMatchDetailHtml(game);
     _content.scrollTop = 0;
-    
+
     const backBtn = detailDiv.querySelector('.pm-btn-back');
     if (backBtn) {
       backBtn.addEventListener('click', () => {
@@ -1553,6 +1568,7 @@ export const MatchHistoryModal = (function() {
         listDiv.style.display = 'flex';
         if (filterSelect) filterSelect.style.display = 'block';
         if (loadingDiv && _hasMore) loadingDiv.style.display = 'block';
+        _content.scrollTop = savedScrollTop;
       });
     }
   }
