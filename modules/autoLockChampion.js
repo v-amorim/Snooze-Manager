@@ -1,6 +1,6 @@
 /**
  * @name Snooze-AutoLockChampion
- * @version 1.0.0
+ * @version 1.0.1
  * @author SnoozeFest - github@ReformedDoge
  * @description Auto-locks priority champions during champ select with role-specific picks and bans.
  * @link https://github.com/ReformedDoge
@@ -19,13 +19,15 @@ let lastSessionData = null;
 let emberTimerCrossed = false;
 let unregisterPanic = null;
 let panicActive = false;
+let actionActiveStartTimes = new Map();
 
 const MAX_PRIORITY_CHAMPS = 3;
 const PICK_PRIORITY_KEY = 'pickIds';
 const BAN_PRIORITY_KEY = 'banIds';
-const LOCK_BEFORE_END_KEY = 'lockBeforeEnd';
-const LOCK_BEFORE_END_MIN = 0;
-const LOCK_BEFORE_END_MAX = 60;
+const LOCK_MODE_KEY = 'lockMode';
+const LOCK_TIME_KEY = 'lockTime';
+const LOCK_TIME_MIN = 0;
+const LOCK_TIME_MAX = 60;
 
 function fetchCurrentSummoner() {
     if (currentSummonerId && currentPuuid) return;
@@ -38,12 +40,11 @@ function fetchCurrentSummoner() {
     }).catch(()=>{});
 }
 
-function getLockBeforeEndMs() {
-    const v = Utils.Store.get('autoLockChampion', LOCK_BEFORE_END_KEY);
-    if (v === undefined || v === null) return 0;
-    const n = Number(v);
-    if (!isFinite(n)) return 0;
-    return Math.min(LOCK_BEFORE_END_MAX, Math.max(LOCK_BEFORE_END_MIN, n)) * 1000;
+function getLockSettings() {
+    const mode = Utils.Store.get('autoLockChampion', LOCK_MODE_KEY) === 'after' ? 'after' : 'before';
+    const time = Number(Utils.Store.get('autoLockChampion', LOCK_TIME_KEY));
+    const timeMs = isFinite(time) ? Math.min(LOCK_TIME_MAX, Math.max(LOCK_TIME_MIN, time)) * 1000 : 0;
+    return { mode, timeMs };
 }
 
 function toggleFeature(enabled) {
@@ -318,20 +319,63 @@ function renderExtraSettings(container) {
         updatePickers();
     });
 
-    // Lock Before End Input Row
+    // Lock Timing Mode Row
+    const lockModeRow = document.createElement('div');
+    Object.assign(lockModeRow.style, { display: 'flex', alignItems: 'center', gap: '10px', marginTop: '5px' });
+
+    const lockModeLabel = document.createElement('span');
+    lockModeLabel.textContent = 'Auto Lock Timing:';
+    Object.assign(lockModeLabel.style, { color: '#a09b8c', fontSize: '12px', whiteSpace: 'nowrap' });
+
+    const lockModeSelect = document.createElement('select');
+    Object.assign(lockModeSelect.style, {
+        background: '#111',
+        border: '1px solid #3e2e13',
+        color: '#f0e6d2',
+        padding: '5px 8px',
+        borderRadius: '2px',
+        outline: 'none',
+        fontSize: '13px'
+    });
+
+    const modeOptBefore = document.createElement('option');
+    modeOptBefore.value = 'before';
+    modeOptBefore.textContent = 'Before turn ends';
+    const modeOptAfter = document.createElement('option');
+    modeOptAfter.value = 'after';
+    modeOptAfter.textContent = 'After turn starts';
+    lockModeSelect.appendChild(modeOptBefore);
+    lockModeSelect.appendChild(modeOptAfter);
+    lockModeSelect.value = getLockSettings().mode;
+
+    lockModeSelect.addEventListener('click', (e) => e.stopPropagation());
+    lockModeSelect.addEventListener('change', () => {
+        Utils.Store.set('autoLockChampion', LOCK_MODE_KEY, lockModeSelect.value);
+        lockLabel.textContent = lockModeSelect.value === 'after'
+            ? 'Lock X seconds after turn starts (0 = instant)'
+            : 'Lock in X seconds before turn ends (0 = instant)';
+    });
+
+    lockModeRow.appendChild(lockModeLabel);
+    lockModeRow.appendChild(lockModeSelect);
+    container.appendChild(lockModeRow);
+
+    // Lock Time Input Row
     const lockRow = document.createElement('div');
     Object.assign(lockRow.style, { display: 'flex', alignItems: 'center', gap: '10px', marginTop: '5px' });
 
     const lockLabel = document.createElement('span');
-    lockLabel.textContent = 'Lock in X seconds before turn ends (0 = instant)';
+    lockLabel.textContent = getLockSettings().mode === 'after'
+        ? 'Lock X seconds after turn starts (0 = instant)'
+        : 'Lock in X seconds before turn ends (0 = instant)';
     Object.assign(lockLabel.style, { color: '#a09b8c', fontSize: '12px', whiteSpace: 'nowrap' });
 
     const lockInput = document.createElement('input');
     lockInput.type = 'number';
-    lockInput.min = String(LOCK_BEFORE_END_MIN);
-    lockInput.max = String(LOCK_BEFORE_END_MAX);
+    lockInput.min = String(LOCK_TIME_MIN);
+    lockInput.max = String(LOCK_TIME_MAX);
     lockInput.step = '0.5';
-    lockInput.value = String(getLockBeforeEndMs() / 1000);
+    lockInput.value = String(getLockSettings().timeMs / 1000);
     Object.assign(lockInput.style, {
         background: '#111',
         border: '1px solid #3e2e13',
@@ -347,10 +391,10 @@ function renderExtraSettings(container) {
     lockInput.addEventListener('change', () => {
         let v = parseFloat(lockInput.value);
         if (!isFinite(v)) v = 0;
-        v = Math.min(LOCK_BEFORE_END_MAX, Math.max(LOCK_BEFORE_END_MIN, v));
+        v = Math.min(LOCK_TIME_MAX, Math.max(LOCK_TIME_MIN, v));
         v = Math.round(v * 10) / 10;
         lockInput.value = String(v);
-        Utils.Store.set('autoLockChampion', LOCK_BEFORE_END_KEY, v);
+        Utils.Store.set('autoLockChampion', LOCK_TIME_KEY, v);
     });
 
     lockRow.appendChild(lockLabel);
@@ -399,13 +443,13 @@ function completePendingActions() {
         return a.isInProgress;
     });
     if (myActions.length === 0) return;
-    const lockBeforeEndMs = getLockBeforeEndMs();
-    if (lockBeforeEndMs <= 0) return;
+    const lockSettings = getLockSettings();
+    if (lockSettings.timeMs <= 0) return;
     const myPosition = resolveMyPosition(s);
     for (const action of myActions) {
         const champId = chooseChampionForAction(s, action, myPosition);
         if (!champId) continue;
-        const shouldComplete = shouldCompleteAction(s, action, true, true, lockBeforeEndMs);
+        const shouldComplete = shouldCompleteAction(s, action, true, true, lockSettings);
         if (!shouldComplete) continue;
         if (action.type === 'ban' && getChampSelectPhase(s) !== 'BAN_PICK') continue;
         const now = Date.now();
@@ -433,13 +477,13 @@ function installEmberTimerHook() {
                         const v = this.get('session.timer.timeRemainingInMs');
                         emberTimerMs = v;
                         if (isEnabled && !panicActive) {
-                            const lockMs = getLockBeforeEndMs();
-                            if (lockMs > 0 && v !== null && v !== undefined) {
-                                if (v <= lockMs && !emberTimerCrossed) {
+                            const lockSettings = getLockSettings();
+                            if (lockSettings.mode === 'before' && lockSettings.timeMs > 0 && v !== null && v !== undefined) {
+                                if (v <= lockSettings.timeMs && !emberTimerCrossed) {
                                     emberTimerCrossed = true;
                                     Utils.Debug.log('[AutoSelect] Ember timer crossed threshold, triggering lock');
                                     completePendingActions();
-                                } else if (v > lockMs) {
+                                } else if (v > lockSettings.timeMs) {
                                     emberTimerCrossed = false;
                                 }
                             }
@@ -470,6 +514,15 @@ export function init(context) {
             Utils.Store.set('autoLockChampion', 'instantBan', legacyInstant);
         }
         Utils.Store.remove('autoLockChampion', 'instant');
+    }
+
+    // Migrate legacy "lockBeforeEnd" to new lock mode system
+    if (Utils.Store.get('autoLockChampion', LOCK_TIME_KEY) === undefined) {
+        const legacy = Utils.Store.get('autoLockChampion', 'lockBeforeEnd');
+        Utils.Store.set('autoLockChampion', LOCK_TIME_KEY, legacy !== undefined ? legacy : 0);
+    }
+    if (Utils.Store.get('autoLockChampion', LOCK_MODE_KEY) === undefined) {
+        Utils.Store.set('autoLockChampion', LOCK_MODE_KEY, 'before');
     }
 
     Utils.Settings.inject(context, {
@@ -574,18 +627,31 @@ async function processChampSelectSession(s) {
 
     if (myActions.length === 0) {
       lastAutoLockKeys.clear();
+      actionActiveStartTimes.clear();
       return;
     }
 
     const instantPick = Utils.Store.get('autoLockChampion', 'instantPick') !== false;
     const instantBan = Utils.Store.get('autoLockChampion', 'instantBan') !== false;
-    const lockBeforeEndMs = getLockBeforeEndMs();
+    const lockSettings = getLockSettings();
 
     for (const action of myActions) {
       const champId = chooseChampionForAction(s, action, myPosition);
       if (!champId) continue;
 
-      const shouldComplete = shouldCompleteAction(s, action, instantPick, instantBan, lockBeforeEndMs);
+      if (!actionActiveStartTimes.has(action.id)) {
+          actionActiveStartTimes.set(action.id, Date.now());
+          if (lockSettings.mode === 'after' && lockSettings.timeMs > 0) {
+              setTimeout(() => {
+                  if (!isEnabled || panicActive) return;
+                  Utils.LCU.get('/lol-champ-select/v1/session').then(session => {
+                      if (session) processChampSelectSession(session);
+                  }).catch(() => {});
+              }, lockSettings.timeMs + 50);
+          }
+      }
+
+      const shouldComplete = shouldCompleteAction(s, action, instantPick, instantBan, lockSettings);
 
       if (action.championId === champId && action.completed === shouldComplete) {
           continue;
@@ -630,14 +696,29 @@ function getChampSelectPhase(session) {
     return session?.timer?.phase || session?.phase || 'unknown';
 }
 
-function shouldCompleteAction(session, action, instantPick, instantBan, lockBeforeEndMs) {
+function shouldCompleteAction(session, action, instantPick, instantBan, lockSettings) {
     // Arena's freeform pick window has no per-player turn order, so picks never
     // go isInProgress — mirror the same PLANNING carve-out the caller's
     // eligibility filter uses, or these actions could hover but never lock in.
     const isEligible = action.isInProgress || (action.type === 'pick' && getChampSelectPhase(session) === 'PLANNING');
     if (!isEligible) return false;
 
-    if (lockBeforeEndMs > 0) {
+    if (lockSettings.timeMs > 0) {
+        if (lockSettings.mode === 'after') {
+            const startTs = actionActiveStartTimes.get(action.id);
+            if (!startTs) return false;
+            const elapsed = Date.now() - startTs;
+            const shouldComplete = elapsed >= lockSettings.timeMs;
+            // Classic Draft/Ranked report the ban window as 'BAN_PICK'; Arena's
+            // single-phase flow reports the same window as 'PLANNING'.
+            if (shouldComplete && action.type === 'ban') {
+                const phase = getChampSelectPhase(session);
+                if (phase !== 'BAN_PICK' && phase !== 'PLANNING') return false;
+            }
+            Utils.Debug.log(`[AutoSelect] lockAfterStart: elapsed=${elapsed}ms, threshold=${lockSettings.timeMs}ms, complete=${shouldComplete}`);
+            return shouldComplete;
+        }
+
         let timerSrc = 'none';
         let timeRemaining = null;
 
@@ -658,14 +739,14 @@ function shouldCompleteAction(session, action, instantPick, instantBan, lockBefo
         }
 
         if (timeRemaining !== null) {
-            const shouldComplete = timeRemaining <= lockBeforeEndMs;
+            const shouldComplete = timeRemaining <= lockSettings.timeMs;
             // Classic Draft/Ranked report the ban window as 'BAN_PICK'; Arena's
             // single-phase flow reports the same window as 'PLANNING'.
             if (shouldComplete && action.type === 'ban') {
                 const phase = getChampSelectPhase(session);
                 if (phase !== 'BAN_PICK' && phase !== 'PLANNING') return false;
             }
-            Utils.Debug.log(`[AutoSelect] lockBeforeEnd: timer=${timeRemaining}ms, threshold=${lockBeforeEndMs}ms, complete=${shouldComplete}, src=${timerSrc}`);
+            Utils.Debug.log(`[AutoSelect] lockBeforeEnd: timer=${timeRemaining}ms, threshold=${lockSettings.timeMs}ms, complete=${shouldComplete}, src=${timerSrc}`);
             return shouldComplete;
         }
         Utils.Debug.warn('[AutoSelect] lockBeforeEnd enabled but no timer source available, falling through to instant');
@@ -767,6 +848,7 @@ function panic() {
     panicActive = true;
     emberTimerCrossed = false;
     lastAutoLockKeys.clear();
+    actionActiveStartTimes.clear();
     if (window.Toast && typeof window.Toast.success === 'function') {
         window.Toast.success('Auto Lock Override — Next champ select will re-enable');
     }
@@ -794,6 +876,7 @@ function unmountAutoLockChampion() {
         autoLockSessionUnsub = null;
     }
     lastAutoLockKeys.clear();
+    actionActiveStartTimes.clear();
     lastBanDebugKey = '';
 }
 

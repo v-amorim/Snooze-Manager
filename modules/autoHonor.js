@@ -1,18 +1,48 @@
 /**
  * @name Snooze-AutoHonor
- * @version 1.0.1
+ * @version 1.0.2
  * @author SnoozeFest - github@ReformedDoge
- * @description Automatically honor players after matches using configurable target selection.
+ * @description Automatically honor players after matches with optional contribution-based selection and score display.
  * @link https://github.com/ReformedDoge
  */
 import Utils from './generalUtils.js';
 
 let isEnabled = false;
 let honorAttemptedForCurrentGame = false;
+let eogStatsCache = null;
 
 function toggleFeature(enabled) {
     isEnabled = enabled;
     Utils.Store.set('autoHonor', 'enabled', enabled);
+}
+
+function getDelay() {
+    return Utils.Store.get('autoHonor', 'delayMs') || 200;
+}
+
+function uncheckToggleRow(row) {
+    const cb = row?.querySelector('input[type="checkbox"]');
+    if (cb) {
+        cb.checked = false;
+        const wrapper = cb.closest('lol-uikit-flat-checkbox');
+        if (wrapper) wrapper.classList.remove('checked');
+    }
+}
+
+async function getEogStatsBlock() {
+    if (eogStatsCache) return eogStatsCache;
+    const data = await Utils.LCU.get('/lol-end-of-game/v1/eog-stats-block').catch(() => null);
+    if (data?.teams?.length) {
+        eogStatsCache = data;
+        Utils.Debug.log('[AutoHonor] eogStatsBlock cached successfully.');
+    }
+    return eogStatsCache;
+}
+
+function getScores(eogStats) {
+    // Returns a Map<puuid, { score, kda, kills, deaths, assists, _scoreRatio }>
+    if (!eogStats?.teams?.length) return new Map();
+    return Utils.Scoring.computeScores(Utils.Scoring.normalizeEogStats(eogStats));
 }
 
 function renderExtraSettings(container) {
@@ -47,9 +77,66 @@ function renderExtraSettings(container) {
     selectRow.appendChild(select);
 
     container.appendChild(selectRow);
-    container.appendChild(Utils.Settings.createToggleRow('Skip Honor', Utils.Store.get('autoHonor', 'skip') || false, (next) => {
+
+    // Delay between votes
+    const delayRow = document.createElement('div');
+    Object.assign(delayRow.style, { display: 'flex', alignItems: 'center', gap: '10px', marginTop: '5px' });
+
+    const delayLabel = document.createElement('span');
+    delayLabel.textContent = 'Delay between votes (ms)';
+    Object.assign(delayLabel.style, { color: '#a09b8c', fontSize: '12px', whiteSpace: 'nowrap' });
+
+    const delayInput = document.createElement('input');
+    delayInput.type = 'number';
+    delayInput.min = '0';
+    delayInput.max = '5000';
+    delayInput.step = '50';
+    delayInput.value = String(getDelay());
+    Object.assign(delayInput.style, {
+        background: '#111',
+        border: '1px solid #3e2e13',
+        color: '#f0e6d2',
+        padding: '5px 8px',
+        borderRadius: '2px',
+        outline: 'none',
+        width: '70px',
+        fontSize: '13px'
+    });
+
+    delayInput.addEventListener('click', (e) => e.stopPropagation());
+    delayInput.addEventListener('change', () => {
+        let v = parseInt(delayInput.value, 10);
+        if (!isFinite(v)) v = 0;
+        v = Math.min(5000, Math.max(0, v));
+        delayInput.value = String(v);
+        Utils.Store.set('autoHonor', 'delayMs', v);
+    });
+
+    delayRow.appendChild(delayLabel);
+    delayRow.appendChild(delayInput);
+    container.appendChild(delayRow);
+
+    // Skip Honor toggle
+    const skipRow = Utils.Settings.createToggleRow('Skip Honor', Utils.Store.get('autoHonor', 'skip') || false, (next) => {
         Utils.Store.set('autoHonor', 'skip', next);
-    }));
+        if (next) {
+            Utils.Store.set('autoHonor', 'prioritizeByContribution', false);
+            uncheckToggleRow(container.querySelector('.ah-prioritize-toggle'));
+        }
+    });
+    skipRow.classList.add('ah-skip-honor-row');
+    container.appendChild(skipRow);
+
+    // Prioritize by Contribution toggle (mutually exclusive with Skip Honor)
+    const prioRow = Utils.Settings.createToggleRow('Prioritize by Contribution', Utils.Store.get('autoHonor', 'prioritizeByContribution') || false, (next) => {
+        Utils.Store.set('autoHonor', 'prioritizeByContribution', next);
+        if (next) {
+            Utils.Store.set('autoHonor', 'skip', false);
+            uncheckToggleRow(container.querySelector('.ah-skip-honor-row'));
+        }
+    });
+    prioRow.classList.add('ah-prioritize-toggle');
+    container.appendChild(prioRow);
 }
 
 export function init(context) {
@@ -63,6 +150,8 @@ export function init(context) {
     });
 
     isEnabled = Utils.Store.get('autoHonor', 'enabled') || false;
+
+    const showScoreOnCard = Utils.Store.get('autoHonor', 'showScoreOnCard') || false;
 
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({
@@ -82,6 +171,13 @@ export function init(context) {
                 {
                     type: 'custom',
                     render: (row) => renderExtraSettings(row)
+                },
+                {
+                    type: 'toggle',
+                    id: 'sm:showScoreOnCard',
+                    label: 'Show KDA & Score on Honor Card',
+                    value: showScoreOnCard,
+                    onChange: (val) => Utils.Store.set('autoHonor', 'showScoreOnCard', val)
                 }
             ]
         });
@@ -99,6 +195,13 @@ export function init(context) {
             extraRow.style.marginTop = "10px";
             renderExtraSettings(extraRow);
             plugin.appendChild(extraRow);
+
+            const scoreRow = Utils.Settings.createToggleRow('Show KDA & Score on Honor Card', showScoreOnCard, (next) => {
+                Utils.Store.set('autoHonor', 'showScoreOnCard', next);
+            });
+            scoreRow.classList.add('plugins-settings-row');
+            scoreRow.style.marginTop = '10px';
+            plugin.appendChild(scoreRow);
         });
     }
 }
@@ -173,6 +276,7 @@ async function autoHonorTeammate() {
 
     try {
         const skip = Utils.Store.get('autoHonor', 'skip') || false;
+        const prioritize = Utils.Store.get('autoHonor', 'prioritizeByContribution') || false;
 
         // Wait for the LCU to populate the ballot
         const ballot = await getValidBallot();
@@ -199,9 +303,35 @@ async function autoHonorTeammate() {
             Utils.Debug.log(`[AutoHonor] Target mode is set to: "${mode}". Total matches found: ${candidates.length}. Actionable votes: ${voteCount}`);
 
             if (candidates && candidates.length > 0) {
-                // Shuffle candidates
-                const shuffled = [...candidates].sort(() => 0.5 - Math.random());
-                const totalVotes = Math.min(voteCount, shuffled.length);
+                let selectedCandidates = candidates;
+
+                if (prioritize) {
+                    Utils.Debug.log('[AutoHonor] Prioritize by Contribution enabled. Fetching stats...');
+                    const eogStats = await getEogStatsBlock();
+                    if (eogStats) {
+                        const scoresMap = getScores(eogStats);
+                        selectedCandidates = candidates.map(c => {
+                            const s = scoresMap.get(c.puuid);
+                            return {
+                                ...c,
+                                _score: s?.score || 0,
+                                _kda: s?.kda || '0.0'
+                            };
+                        });
+                        selectedCandidates.sort((a, b) => b._score - a._score);
+                        Utils.Debug.log('[AutoHonor] Priority order:', selectedCandidates.map(c =>
+                            `${c.summonerName || c.gameName || c.puuid}: score=${c._score} KDA=${c._kda}`
+                        ));
+                    } else {
+                        Utils.Debug.warn('[AutoHonor] Could not fetch eogStatsBlock for scoring. Falling back to random selection.');
+                    }
+                }
+
+                if (!prioritize || !selectedCandidates[0]?._score) {
+                    selectedCandidates = [...selectedCandidates].sort(() => 0.5 - Math.random());
+                }
+
+                const totalVotes = Math.min(voteCount, selectedCandidates.length);
 
                 // Cast votes sequentially. Multi-vote ballots (voteCount > 1) share a
                 // single ballot version, so firing the POSTs in parallel can have the
@@ -213,10 +343,11 @@ async function autoHonorTeammate() {
                         return;
                     }
 
-                    const target = shuffled[i];
+                    const target = selectedCandidates[i];
                     const targetName = target.summonerName || target.gameName || target.puuid;
+                    const scoreInfo = target._score ? ` (score: ${target._score}, KDA: ${target._kda})` : '';
 
-                    Utils.Debug.info(`[AutoHonor] [Vote ${i + 1}/${totalVotes}] Casting HEART vote for: ${targetName}`);
+                    Utils.Debug.info(`[AutoHonor] [Vote ${i + 1}/${totalVotes}] Casting HEART vote for: ${targetName}${scoreInfo}`);
 
                     try {
                         await Utils.LCU.post('/lol-honor/v1/honor', {
@@ -228,7 +359,7 @@ async function autoHonorTeammate() {
                         Utils.Debug.error(`[AutoHonor] Vote failed for: ${targetName}`, err);
                     }
 
-                    if (i < totalVotes - 1) await new Promise(r => setTimeout(r, 200));
+                    if (i < totalVotes - 1) await new Promise(r => setTimeout(r, getDelay()));
                 }
             } else {
                 Utils.Debug.warn('[AutoHonor] No eligible candidates found matching the selected mode.');
@@ -255,17 +386,104 @@ async function autoHonorTeammate() {
     }
 }
 
+function scoreColor(ratio) {
+    // ratio 0 = worst (red), 0.5 = neutral (grey), 1 = best (vivid green)
+    if (ratio >= 0.5) {
+        const t = (ratio - 0.5) * 2;
+        return `rgb(${Math.round(160 - t * 160)}, ${Math.round(160 + t * 60)}, ${Math.round(160 - t * 20)})`;
+    } else {
+        const t = ratio * 2;
+        return `rgb(${Math.round(220 - t * 60)}, ${Math.round(60 + t * 100)}, ${Math.round(70 + t * 90)})`;
+    }
+}
+
+function injectScoreOnHonorCard(element, puuid) {
+    if (!element || !element.isConnected) return;
+    if (element.querySelector('.ah-score-badge')) return;
+
+    (async () => {
+        try {
+            if (!element || !element.isConnected) return;
+            const eogStats = await getEogStatsBlock();
+            if (!eogStats) return;
+            if (!element || !element.isConnected) return;
+
+            const scoresMap = getScores(eogStats);
+            const rating = scoresMap.get(puuid);
+            if (!rating) return;
+
+            if (!element || !element.isConnected) return;
+            if (element.querySelector('.ah-score-badge')) return;
+
+            const wrapper = element.querySelector('.vote-ceremony-candidate-champ-image-wrapper');
+            if (!wrapper) return;
+
+            const color = scoreColor(rating._scoreRatio);
+
+            const chip = document.createElement('div');
+            chip.className = 'ah-score-badge';
+            chip.style.cssText = 'position:absolute;top:6px;right:6px;background:rgba(10,10,22,0.75);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);border-radius:4px;padding:4px 7px;text-align:center;line-height:1.4;pointer-events:none;z-index:10;';
+
+            chip.innerHTML = `
+                <div style="color:#e8d5a3;font-weight:700;font-size:11px;letter-spacing:0.3px;text-shadow:0 0 4px rgba(0,0,0,0.9),0 0 2px rgba(0,0,0,0.9);">${rating.kills}/${rating.deaths}/${rating.assists}</div>
+                <div style="font-size:9px;display:flex;gap:6px;justify-content:center;">
+                    <span style="font-weight:600;text-shadow:0 0 3px rgba(0,0,0,0.9);color:#c0b89a;">${rating.kda} KDA</span>
+                    <span style="color:${color};font-weight:700;text-shadow:0 0 3px rgba(0,0,0,0.9),0 0 6px ${color}80;">Score: ${rating.score}</span>
+                </div>
+            `;
+
+            wrapper.style.position = 'relative';
+            wrapper.appendChild(chip);
+        } catch (e) {
+            Utils.Debug.warn('[AutoHonor] Score injection failed:', e);
+        }
+    })();
+}
+
 export function load() {
+    Utils.Debug.log('[AutoHonor] Module loaded.');
+
+    // Inject badge font to resist theme font overrides
+    if (!document.getElementById('ah-badge-font')) {
+        const s = document.createElement('style');
+        s.id = 'ah-badge-font';
+        s.textContent = '.ah-score-badge,.ah-score-badge *{font-family:"Segoe UI","Helvetica Neue",Arial,sans-serif !important}';
+        document.head.appendChild(s);
+    }
+
+    const scoreOnCard = () => Utils.Store.get('autoHonor', 'showScoreOnCard');
+
+    // Pre-populate eogStatsBlock cache via WS observation (fast path) — only
+    // subscribe when there's a reason to (matches the project's convention of
+    // not firing unneeded LCU/WS listeners while a feature is off).
+    if (Utils.LCU?.observe && (Utils.Store.get('autoHonor', 'enabled') || scoreOnCard())) {
+        const statsUnsub = Utils.LCU.observe('/lol-end-of-game/v1/eog-stats-block', (event) => {
+            if (event.data?.teams?.length) {
+                eogStatsCache = event.data;
+                Utils.Debug.log('[AutoHonor] eogStatsBlock cached via WS push.');
+                statsUnsub();
+            }
+        });
+    }
+
     if (Utils.LCU && Utils.LCU.observe) {
         Utils.LCU.observe('/lol-gameflow/v1/gameflow-phase', e => {
             //Utils.Debug.log('[AutoHonor] Gameflow phase transition detected:', e.data);
-            
+
             const isHonorPhase = e.data === 'PreEndOfGame' || e.data === 'EndOfGame';
             if (!isHonorPhase && e.data !== 'WaitingForStats') {
                 /* if (honorAttemptedForCurrentGame) {
                     Utils.Debug.log('[AutoHonor] Transitioned out of postgame. Clearing active session tracking flags.');
                 } */
                 honorAttemptedForCurrentGame = false;
+                eogStatsCache = null;
+            }
+
+            // Try to eagerly cache eogStatsBlock when phase changes
+            if (['PreEndOfGame', 'WaitingForStats', 'EndOfGame'].includes(e.data) && !eogStatsCache) {
+                Utils.LCU.get('/lol-end-of-game/v1/eog-stats-block').then(data => {
+                    if (data?.teams?.length) eogStatsCache = data;
+                }).catch(() => {});
             }
 
             const currentEnabled = Utils.Store.get('autoHonor', 'enabled');
@@ -280,5 +498,36 @@ export function load() {
                 autoHonorTeammate();
             }
         });
+    }
+
+    // Register Ember hook for showing KDA/score on honor cards — only when toggle is on
+    if (Utils.Hooks?.Ember?.registerRule && scoreOnCard()) {
+        Utils.Hooks.Ember.registerRule({
+            name: 'ah-honor-card-score',
+            matcher: (args) => {
+                for (const a of args) {
+                    if (a && typeof a === 'object' && a.baseClassName === 'vote-ceremony-player-card') {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            mixin() {
+                return {
+                    didRender() {
+                        this._super(...arguments);
+                        if (!this.element || !scoreOnCard()) return;
+                        if (this.element.querySelector('.ah-score-badge')) return;
+
+                        const candidate = this.get && this.get('candidate');
+                        if (!candidate?.puuid) return;
+
+                        Utils.Debug.log('[AutoHonor] Injecting score badge for', candidate.puuid);
+                        injectScoreOnHonorCard(this.element, candidate.puuid);
+                    }
+                };
+            }
+        });
+        Utils.Debug.log('[AutoHonor] Honor card score display hook registered.');
     }
 }
