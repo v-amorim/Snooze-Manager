@@ -24,6 +24,7 @@ Everything is built to be lightweight and event driven: no embedded React applic
 - `Player Analysis`: Auto-opens a modal displaying rank & recent stats for all players when a game starts. Optionally shows players stats in champion select & highlights premades in both views.
 - `Profile Tweaks`: Remove profile banner/border, clone challenge token & unlock profile background.
 - `Social Panel Tweaks`: Enhances the social panel with queue labels, in-game timers, highlighting for same lobby friends, a collapsible sidebar (crop/stretch/slide) & a group folder invite option.
+- `Use Client In Game`: Dismiss the "game in progress" screen so you can browse the client (profile, collection, match history) during a live game. The screen returns automatically when a reconnect is needed.
 - `Whale Helper`: Shows rerollable skins, icons, wards & emotes you don't own via a button on the loot page. Adds skin tier badges above name in champion select. Filters out unowned skins/chromas in champion select for a less cluttered skin carousel & chroma picker. Adds a loot drop table odds previewer accessible via the loot tab context menu (right click).
 - `Name Spoofer`: Locally spoofs displayed names for you and other players. Cosmetic only.
 
