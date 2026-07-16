@@ -83,6 +83,8 @@ function renderExtraSettings(container) {
         if (next) {
             Utils.Store.set('autoHonor', 'prioritizeByContribution', false);
             uncheckToggleRow(container.querySelector('.ah-prioritize-toggle'));
+            Utils.Store.set('autoHonor', 'preferFriends', false);
+            uncheckToggleRow(container.querySelector('.ah-prefer-friends-row'));
         }
     });
     skipRow.classList.add('ah-skip-honor-row');
@@ -98,6 +100,17 @@ function renderExtraSettings(container) {
     });
     prioRow.classList.add('ah-prioritize-toggle');
     container.appendChild(prioRow);
+
+    // Prefer Friends toggle — honor friends first out of the current mode's candidates
+    const preferRow = Utils.Settings.createToggleRow('Prefer Friends', Utils.Store.get('autoHonor', 'preferFriends') || false, (next) => {
+        Utils.Store.set('autoHonor', 'preferFriends', next);
+        if (next) {
+            Utils.Store.set('autoHonor', 'skip', false);
+            uncheckToggleRow(container.querySelector('.ah-skip-honor-row'));
+        }
+    });
+    preferRow.classList.add('ah-prefer-friends-row');
+    container.appendChild(preferRow);
 }
 
 export function init(context) {
@@ -213,6 +226,17 @@ async function triggerAutoHonorIfReady() {
     autoHonorTeammate();
 }
 
+async function getFriendPuuids() {
+    const friends = await Utils.LCU.get('/lol-chat/v1/friends').catch(() => null);
+    const set = new Set();
+    if (Array.isArray(friends)) {
+        for (const f of friends) {
+            if (f?.puuid) set.add(f.puuid);
+        }
+    }
+    return set;
+}
+
 async function getEogStatsBlock() {
     if (eogStatsCache) return eogStatsCache;
     const data = await Utils.LCU.get('/lol-end-of-game/v1/eog-stats-block').catch(() => null);
@@ -285,6 +309,19 @@ async function autoHonorTeammate() {
             if (mode === 'allies') candidates = [...(ballot.eligibleAllies || [])];
             else if (mode === 'enemies') candidates = [...(ballot.eligibleOpponents || [])];
             else if (mode === 'random') candidates = [...(ballot.eligibleAllies || []), ...(ballot.eligibleOpponents || [])];
+
+            const preferFriends = Utils.Store.get('autoHonor', 'preferFriends') || false;
+            if (preferFriends) {
+                const friendPuuids = await getFriendPuuids();
+                const friendCandidates = candidates.filter(c => friendPuuids.has(c.puuid));
+                if (friendCandidates.length) {
+                    Utils.Debug.log(`[AutoHonor] Prefer Friends: ${friendCandidates.length} friend(s) in match.`);
+                    candidates = friendCandidates;
+                } else {
+                    Utils.Debug.log('[AutoHonor] Prefer Friends: no friend in match. Falling back to current mode.');
+                    // leave candidates unchanged — honor per the selected mode
+                }
+            }
 
             const voteCount = ballot.votePool?.votes || 1;
             Utils.Debug.log(`[AutoHonor] Target mode: "${mode}", candidates: ${candidates.length}, votes: ${voteCount}`);
