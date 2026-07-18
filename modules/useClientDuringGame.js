@@ -21,9 +21,12 @@ const BYPASS_CSS = `
     }
     /* Block queueing a new game while a match is live. */
     .patcher-play-button {
-        pointer-events: none !important;
         opacity: 0.4 !important;
         cursor: default !important;
+    }
+    .patcher-play-button,
+    .patcher-play-button * {
+        pointer-events: none !important;
     }
 `;
 
