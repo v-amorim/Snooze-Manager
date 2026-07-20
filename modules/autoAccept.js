@@ -33,6 +33,11 @@ function migrateSettings() {
     }
 }
 
+function exitQueueOnDodge(source) {
+    Utils.Debug.log(`[AutoAccept] Dodge detected via ${source}. Exiting queue...`);
+    Utils.LCU.delete('/lol-matchmaking/v1/search').catch(() => {});
+}
+
 function getDelay() {
     const v = Utils.Store.get('autoAccept', DELAY_KEY);
     if (v === undefined || v === null) return 0;
@@ -126,6 +131,8 @@ export function init(context) {
         Utils.Store.set('autoAccept', DELAY_KEY, 0);
     }
 
+    installExitOnDodgeEmberHook();
+
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({
             id: 'autoAccept',
@@ -207,16 +214,31 @@ export function load() {
             }
         });
 
-        Utils.LCU.observe('/lol-matchmaking/v1/notifications', e => {
+        Utils.LCU.observe('/lol-lobby/v2/notifications', e => {
             if (!e.data || !Utils.Store.get('autoAccept', EXIT_ON_DODGE_KEY)) return;
             const notifications = Array.isArray(e.data) ? e.data : [e.data];
             for (const n of notifications) {
                 if (n.notificationReason === 'StrangerDodged') {
-                    Utils.Debug.log('[AutoAccept] Champ select dodged by Stranger. Exiting queue...');
-                    Utils.LCU.delete('/lol-matchmaking/v1/search').catch(() => {});
+                    exitQueueOnDodge('WS:/lol-lobby/v2/notifications');
                     break;
                 }
             }
         });
     }
+}
+
+function installExitOnDodgeEmberHook() {
+    if (!Utils.Hooks?.Ember?.registerRule) return;
+    Utils.Hooks.Ember.registerRule({
+        name: 'autoAccept-exitOnDodge',
+        matcher: 'parties-notifications',
+        wraps: [{
+            name: '_strangerDodged',
+            replacement(original, args) {
+                original(...args);
+                if (!Utils.Store.get('autoAccept', EXIT_ON_DODGE_KEY)) return;
+                exitQueueOnDodge('EmberHook:parties-notifications._strangerDodged');
+            }
+        }]
+    });
 }

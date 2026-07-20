@@ -13,6 +13,8 @@ const ORIGINAL_ATTR = 'data-sm-social-panel-status-original';
 const ORIGINAL_TITLE_ATTR = 'data-sm-social-panel-status-original-title';
 const ORIGINAL_STYLE_ATTR = 'data-sm-social-panel-status-original-style';
 const CURRENT_TEXT_ATTR = 'data-sm-social-panel-status-current-text';
+
+let _assetsInitPromise = null;
 const PARTY_BORDER_ATTR = 'data-sm-party-border';
 const PARTY_LOCK_ATTR = 'data-sm-party-lock';
 
@@ -748,13 +750,17 @@ function syncLcuObserver() {
     const needsObserver = isEnabled || isPartyGroupEnabled;
     if (needsObserver && !friendListUnsub) {
         if (Utils.LCU && Utils.LCU.observe) {
-            Utils.GameData.Assets.init?.();
             friendListUnsub = Utils.LCU.observe(FRIENDS_URI, (event) => {
                 rebuildStatusIndex(event?.data);
             });
             Utils.LCU.get(FRIENDS_URI)
                 .then(rebuildStatusIndex)
                 .catch(() => {});
+            if (!_assetsInitPromise) {
+                _assetsInitPromise = Utils.GameData.Assets.init().catch(() => {}).then(() => {
+                    refreshTrackedRosterMembers();
+                });
+            }
         }
     } else if (!needsObserver && friendListUnsub) {
         friendListUnsub();

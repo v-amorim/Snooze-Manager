@@ -327,48 +327,55 @@ async function autoHonorTeammate() {
             else if (mode === 'random') candidates = [...(ballot.eligibleAllies || []), ...(ballot.eligibleOpponents || [])];
 
             const preferFriends = Utils.Store.get('autoHonor', 'preferFriends') || false;
-            if (preferFriends) {
-                const friendPuuids = await getFriendPuuids();
-                const friendCandidates = candidates.filter(c => friendPuuids.has(c.puuid));
-                if (friendCandidates.length) {
-                    Utils.Debug.log(`[AutoHonor] Prefer Friends: ${friendCandidates.length} friend(s) in match.`);
-                    candidates = friendCandidates;
-                } else {
-                    Utils.Debug.log('[AutoHonor] Prefer Friends: no friend in match. Falling back to current mode.');
-                    // leave candidates unchanged — honor per the selected mode
-                }
-            }
-
             const voteCount = ballot.votePool?.votes || 1;
             Utils.Debug.log(`[AutoHonor] Target mode is set to: "${mode}". Total matches found: ${candidates.length}. Actionable votes: ${voteCount}`);
 
             if (candidates && candidates.length > 0) {
-                let selectedCandidates = candidates;
+                let selectedCandidates = [];
 
-                if (prioritize) {
-                    Utils.Debug.log('[AutoHonor] Prioritize by Contribution enabled. Fetching stats...');
-                    const eogStats = await getEogStatsBlock();
-                    if (eogStats) {
-                        const scoresMap = getScores(eogStats);
-                        selectedCandidates = candidates.map(c => {
-                            const s = scoresMap.get(c.puuid);
-                            return {
-                                ...c,
-                                _score: s?.score || 0,
-                                _kda: s?.kda || '0.0'
-                            };
-                        });
-                        selectedCandidates.sort((a, b) => b._score - a._score);
-                        Utils.Debug.log('[AutoHonor] Priority order:', selectedCandidates.map(c =>
-                            `${c.summonerName || c.gameName || c.puuid}: score=${c._score} KDA=${c._kda}`
-                        ));
-                    } else {
-                        Utils.Debug.warn('[AutoHonor] Could not fetch eogStatsBlock for scoring. Falling back to random selection.');
+                // Separate friends from the rest
+                let friendCandidates = [];
+                let otherCandidates = [];
+                if (preferFriends) {
+                    const friendPuuids = await getFriendPuuids();
+                    for (const c of candidates) {
+                        if (friendPuuids.has(c.puuid)) {
+                            friendCandidates.push(c);
+                        } else {
+                            otherCandidates.push(c);
+                        }
                     }
+                    Utils.Debug.log(`[AutoHonor] Prefer Friends: ${friendCandidates.length} friend(s), ${otherCandidates.length} other(s).`);
+                } else {
+                    otherCandidates = [...candidates];
                 }
 
-                if (!prioritize || !selectedCandidates[0]?._score) {
-                    selectedCandidates = [...selectedCandidates].sort(() => 0.5 - Math.random());
+                // Build ordered list: friends first, then rest (sorted by contribution or random)
+                if (friendCandidates.length > 0) {
+                    selectedCandidates = [...friendCandidates];
+                }
+                if (otherCandidates.length > 0) {
+                    if (prioritize) {
+                        Utils.Debug.log('[AutoHonor] Prioritize by Contribution enabled. Fetching stats...');
+                        const eogStats = await getEogStatsBlock();
+                        if (eogStats) {
+                            const scoresMap = getScores(eogStats);
+                            otherCandidates = otherCandidates.map(c => {
+                                const s = scoresMap.get(c.puuid);
+                                return { ...c, _score: s?.score || 0, _kda: s?.kda || '0.0' };
+                            });
+                            otherCandidates.sort((a, b) => b._score - a._score);
+                            Utils.Debug.log('[AutoHonor] Priority order:', otherCandidates.map(c =>
+                                `${c.summonerName || c.gameName || c.puuid}: score=${c._score} KDA=${c._kda}`
+                            ));
+                        } else {
+                            Utils.Debug.warn('[AutoHonor] Could not fetch eogStatsBlock for scoring. Falling back to random selection.');
+                            otherCandidates = [...otherCandidates].sort(() => 0.5 - Math.random());
+                        }
+                    } else {
+                        otherCandidates = [...otherCandidates].sort(() => 0.5 - Math.random());
+                    }
+                    selectedCandidates = selectedCandidates.concat(otherCandidates);
                 }
 
                 const totalVotes = Math.min(voteCount, selectedCandidates.length);

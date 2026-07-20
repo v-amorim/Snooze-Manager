@@ -20,6 +20,13 @@ let emberTimerCrossed = false;
 let unregisterPanic = null;
 let panicActive = false;
 let actionActiveStartTimes = new Map();
+let bannableChampionSet = null;
+let bannableChampUnsub = null;
+let pickableChampionSet = null;
+let pickableChampUnsub = null;
+let teammateIntents = new Set(); // championPickIntent > 0 from teammates
+let pluginPickSelectionId = null; // championId we last selected via PATCH (manual pick detection)
+let manuallyOverriddenActionIds = new Set(); // action IDs the user manually changed (per-action override tracking)
 
 const MAX_PRIORITY_CHAMPS = 3;
 const PICK_PRIORITY_KEY = 'pickIds';
@@ -424,6 +431,20 @@ function renderExtraSettings(container) {
     }));
     container.appendChild(banToggleRow);
 
+    const intentRow = document.createElement('div');
+    Object.assign(intentRow.style, { display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', marginTop: '10px' });
+    intentRow.appendChild(Utils.Settings.createToggleRow('Respect Team Intent', Utils.Store.get('autoLockChampion', 'respectTeamIntent') !== false, (next) => {
+        Utils.Store.set('autoLockChampion', 'respectTeamIntent', next);
+    }));
+    container.appendChild(intentRow);
+
+    const manualPickRow = document.createElement('div');
+    Object.assign(manualPickRow.style, { display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', marginTop: '10px' });
+    manualPickRow.appendChild(Utils.Settings.createToggleRow('Allow Manual Pick', Utils.Store.get('autoLockChampion', 'respectManualPick') !== false, (next) => {
+        Utils.Store.set('autoLockChampion', 'respectManualPick', next);
+    }));
+    container.appendChild(manualPickRow);
+
     // Panic key lives in the Settings tab (shared with the menu shortcut); note it here
     const panicNote = document.createElement('div');
     Object.assign(panicNote.style, { color: '#8a9aaa', fontSize: '12px', marginTop: '12px', lineHeight: '1.4' });
@@ -433,14 +454,17 @@ function renderExtraSettings(container) {
 
 }
 
-function completePendingActions() {
-    const s = lastSessionData;
-    if (!isEnabled || !s) return;
+async function completePendingActions() {
+    if (!isEnabled) return;
+    // Fetch fresh session data to avoid stale lastSessionData
+    const s = await Utils.LCU.get('/lol-champ-select/v1/session').catch(() => null);
+    if (!s) return;
+    lastSessionData = s;
     const allActions = s.actions ? s.actions.flat(2) : [];
     const myActions = allActions.filter(a => {
         if (a.actorCellId !== s.localPlayerCellId || a.completed) return false;
         if (a.type !== 'pick' && a.type !== 'ban') return false;
-        return a.isInProgress;
+        return isActionActive(a, s);
     });
     if (myActions.length === 0) return;
     const lockSettings = getLockSettings();
@@ -604,6 +628,12 @@ async function processChampSelectSession(s) {
         Utils.Debug.log('[AutoSelect] New champ select session, auto-lock re-enabled');
     }
 
+    if (manuallyOverriddenActionIds.size > 0 && lastSessionData && s.gameId !== lastSessionData.gameId) {
+        manuallyOverriddenActionIds.clear();
+        pluginPickSelectionId = null;
+        Utils.Debug.log('[AutoSelect] New champ select session, manual override reset');
+    }
+
     lastSessionData = s;
 
     Utils.Debug.log('[AutoSelect] processChampSelectSession: timer=', s?.timer, 'phase=', s?.phase);
@@ -612,16 +642,44 @@ async function processChampSelectSession(s) {
 
     const myPosition = resolveMyPosition(s);
 
+    // Collect teammate championPickIntent for team intent awareness
+    teammateIntents = new Set();
+    if (s.myTeam) {
+        s.myTeam.forEach(p => {
+            const isLocal = (currentPuuid && p.puuid === currentPuuid) ||
+                (currentSummonerId && p.summonerId === currentSummonerId) ||
+                (p.cellId === s.localPlayerCellId);
+            if (!isLocal) {
+                const intent = Number(p.championPickIntent);
+                if (intent > 0) teammateIntents.add(intent);
+            }
+        });
+    }
+
+    // Check for manual user override (per-action: user changed a champion the plugin set)
+    if (Utils.Store.get('autoLockChampion', 'respectManualPick') !== false) {
+        const allActions = s.actions ? s.actions.flat(2) : [];
+        for (const action of allActions) {
+            if (action.actorCellId === s.localPlayerCellId && !action.completed && (action.type === 'pick' || action.type === 'ban')) {
+                const currentId = Number(action.championId || 0);
+                if (currentId && pluginPickSelectionId !== null && currentId !== pluginPickSelectionId) {
+                    manuallyOverriddenActionIds.add(action.id);
+                    Utils.Debug.log(`[AutoSelect] Manual override detected: action ${action.id} (${action.type}) championId=${currentId} !== plugin=${pluginPickSelectionId}, backing off`);
+                }
+            }
+        }
+    }
+
     const allActions = s.actions ? s.actions.flat(2) : [];
     logBanSessionState(s, allActions, myPosition);
 
     const myActions = allActions.filter(a => {
         if (a.actorCellId !== s.localPlayerCellId || a.completed) return false;
         if (a.type !== 'pick' && a.type !== 'ban') return false;
-        
-        if (a.isInProgress) return true;
+
+        if (isActionActive(a, s)) return true;
         if (a.type === 'pick' && getChampSelectPhase(s) === 'PLANNING') return true;
-        
+
         return false;
     });
 
@@ -636,6 +694,11 @@ async function processChampSelectSession(s) {
     const lockSettings = getLockSettings();
 
     for (const action of myActions) {
+      if (manuallyOverriddenActionIds.has(action.id)) {
+          Utils.Debug.log(`[AutoSelect] manually overridden: skipping action ${action.id} (${action.type})`);
+          continue;
+      }
+
       const champId = chooseChampionForAction(s, action, myPosition);
       if (!champId) continue;
 
@@ -643,10 +706,8 @@ async function processChampSelectSession(s) {
           actionActiveStartTimes.set(action.id, Date.now());
           if (lockSettings.mode === 'after' && lockSettings.timeMs > 0) {
               setTimeout(() => {
-                  if (!isEnabled || panicActive) return;
-                  Utils.LCU.get('/lol-champ-select/v1/session').then(session => {
-                      if (session) processChampSelectSession(session);
-                  }).catch(() => {});
+                  if (!isEnabled || panicActive || !lastSessionData) return;
+                  processChampSelectSession(lastSessionData);
               }, lockSettings.timeMs + 50);
           }
       }
@@ -676,11 +737,12 @@ async function processChampSelectSession(s) {
           Utils.Debug.log(`[AutoSelect] ${action.type} patch`, {
               actionId: action.id,
               phase: getChampSelectPhase(s),
-              isInProgress: !!action.isInProgress,
+              active: isActionActive(action, s),
               payload
           });
 
           await Utils.LCU.patch(`/lol-champ-select/v1/session/actions/${action.id}`, payload);
+          pluginPickSelectionId = champId;
       } catch (err) {
           Utils.Debug.warn(`[AutoSelect] ${action.type} patch failed`, {
               actionId: action.id,
@@ -696,11 +758,42 @@ function getChampSelectPhase(session) {
     return session?.timer?.phase || session?.phase || 'unknown';
 }
 
+/**
+ * Returns the set of active (in-progress, non-completed) actions from the session.
+ * finds the first action set where not all actions are completed,
+ * then returns only the non-completed actions within it.
+ */
+function getCurrentActiveActions(session) {
+    const actions = session?.actions;
+    if (!Array.isArray(actions)) return [];
+    for (const actionSet of actions) {
+        if (Array.isArray(actionSet) && actionSet.length > 0) {
+            const allCompleted = actionSet.every(a => a.completed);
+            if (!allCompleted) {
+                return actionSet.filter(a => !a.completed);
+            }
+        }
+    }
+    return [];
+}
+
+/**
+ * Checks if an action is "active" aka the player can act on it. (find first incomplete set, then non-completed actions within it).
+ * Fallback: the raw API's `isInProgress` field
+ */
+function isActionActive(action, session) {
+    if (!action || action.completed) return false;
+    const active = getCurrentActiveActions(session);
+    const viaSet = active.some(a => a.id === action.id);
+    if (!viaSet) return !!action.isInProgress;
+    return true;
+}
+
 function shouldCompleteAction(session, action, instantPick, instantBan, lockSettings) {
     // Arena's freeform pick window has no per-player turn order, so picks never
-    // go isInProgress — mirror the same PLANNING carve-out the caller's
+    // go active — mirror the same PLANNING carve-out the caller's
     // eligibility filter uses, or these actions could hover but never lock in.
-    const isEligible = action.isInProgress || (action.type === 'pick' && getChampSelectPhase(session) === 'PLANNING');
+    const isEligible = isActionActive(action, session) || (action.type === 'pick' && getChampSelectPhase(session) === 'PLANNING');
     if (!isEligible) return false;
 
     if (lockSettings.timeMs > 0) {
@@ -767,7 +860,7 @@ function logBanSessionState(session, allActions, myPosition) {
         id: action.id,
         actorCellId: action.actorCellId,
         isAllyAction: action.isAllyAction,
-        isInProgress: action.isInProgress,
+        active: isActionActive(action, session),
         completed: action.completed,
         championId: action.championId
     }));
@@ -778,6 +871,7 @@ function logBanSessionState(session, allActions, myPosition) {
         myPosition,
         banPriority: getPriorityList(BAN_PRIORITY_KEY, myPosition),
         bannedChampionIds: [...getBannedChampionIds(session)],
+        bannableSetSize: bannableChampionSet?.size ?? 'N/A',
         banActions: compactActions
     };
     const debugKey = JSON.stringify(debugState);
@@ -789,38 +883,80 @@ function logBanSessionState(session, allActions, myPosition) {
 
 function getBannedChampionIds(session) {
     const bans = new Set();
-    const sessionBans = session?.bans || {};
-    
-    [
-        ...(sessionBans.myTeamBans || []),
-        ...(sessionBans.theirTeamBans || []),
-        ...(sessionBans.ourTeamBans || [])
-    ].forEach(id => {
-        if (id) bans.add(Number(id));
-    });
 
+    // Primary: completed ban actions from the flat action array
     if (session?.actions) {
         session.actions.flat(2).forEach(action => {
-            if (action.type === 'ban' && action.championId) {
+            if (action.type === 'ban' && action.championId && action.completed) {
                 bans.add(Number(action.championId));
             }
         });
+    }
+
+    // Secondary: session.bans object (may have champion IDs that are hidden in the action array during simultaneous ban mode)
+    if (session?.bans) {
+        const extractBans = (arr) => {
+            if (Array.isArray(arr)) {
+                arr.forEach(entry => {
+                    if (typeof entry === 'number' && entry > 0) bans.add(entry);
+                    else if (entry && typeof entry === 'object' && entry.championId) bans.add(Number(entry.championId));
+                });
+            }
+        };
+        extractBans(session.bans.myTeamBans);
+        extractBans(session.bans.theirTeamBans);
     }
 
     return bans;
 }
 
 function getPickedChampionIds(session) {
+    const picked = new Set();
+
+    // Completed pick actions from the session
+    if (session?.actions) {
+        session.actions.flat(2).forEach(action => {
+            if (action.type === 'pick' && action.championId && action.completed) {
+                picked.add(Number(action.championId));
+            }
+        });
+    }
+
+    // Also check player championId field (populated on lock-in)
     const players = [...(session?.myTeam || []), ...(session?.theirTeam || [])];
-    return new Set(players
+    players
         .filter((player) => player.cellId !== session?.localPlayerCellId)
-        .map((player) => Number(player.championId))
-        .filter(Boolean));
+        .forEach(player => {
+            const id = Number(player.championId);
+            if (id) picked.add(id);
+        });
+
+    return picked;
+}
+
+function isChampionAvailableForAction(actionType, championId, session) {
+    const bannedIds = getBannedChampionIds(session);
+    if (bannedIds.has(championId)) return false;
+
+    const pickedIds = getPickedChampionIds(session);
+    if (actionType === 'pick' && pickedIds.has(championId)) return false;
+
+    // Server-pushed bannable set may shrink as bans happen
+    if (actionType === 'ban') {
+        if (bannableChampionSet && !bannableChampionSet.has(championId)) return false;
+    }
+
+    // Team intent awareness: don't ban a champion a teammate is hovering
+    if (actionType === 'ban' && Utils.Store.get('autoLockChampion', 'respectTeamIntent') !== false) {
+        if (teammateIntents.has(championId)) return false;
+    }
+
+    return true;
 }
 
 function chooseChampionForAction(session, action, role) {
     const actionType = action.type;
-    
+
     let priorities = getPriorityList(actionType === 'ban' ? BAN_PRIORITY_KEY : PICK_PRIORITY_KEY, role);
     if (priorities.length === 0 && role !== 'default') {
         priorities = getPriorityList(actionType === 'ban' ? BAN_PRIORITY_KEY : PICK_PRIORITY_KEY, 'default');
@@ -828,19 +964,15 @@ function chooseChampionForAction(session, action, role) {
 
     if (priorities.length === 0) return null;
 
-    const bannedIds = getBannedChampionIds(session);
-    const pickedIds = getPickedChampionIds(session);
     const currentChampionId = Number(action.championId || 0);
 
     if (currentChampionId && priorities.includes(currentChampionId)) {
-        return currentChampionId;
+        if (isChampionAvailableForAction(actionType, currentChampionId, session)) {
+            return currentChampionId;
+        }
     }
 
-    return priorities.find((championId) => {
-        if (bannedIds.has(championId)) return false;
-        if (actionType === 'pick' && pickedIds.has(championId)) return false;
-        return true;
-    }) || null;
+    return priorities.find((championId) => isChampionAvailableForAction(actionType, championId, session)) || null;
 }
 
 function panic() {
@@ -855,9 +987,30 @@ function panic() {
 }
 
 function mountAutoLockChampion() {
-    if (!Utils.LCU || !Utils.LCU.observe || autoLockSessionUnsub) return;
+    if (!Utils.LCU || !Utils.LCU.observe) return;
+    // Clean up any stale subscriptions from previous mounts (hot-reload safety)
+    unmountAutoLockChampion();
     panicActive = false;
     unregisterPanic = Utils.Panic.register(panic);
+    bannableChampionSet = null;
+    pickableChampionSet = null;
+
+    bannableChampUnsub = Utils.LCU.observe('/lol-champ-select/v1/bannable-champion-ids', e => {
+        bannableChampionSet = new Set(e.data || []);
+        Utils.Debug.log(`[AutoSelect] bannableChampionSet updated, size=${bannableChampionSet.size}`);
+    });
+    Utils.LCU.get('/lol-champ-select/v1/bannable-champion-ids')
+        .then(data => { bannableChampionSet = new Set(data || []); })
+        .catch(() => {});
+
+    pickableChampUnsub = Utils.LCU.observe('/lol-champ-select/v1/pickable-champion-ids', e => {
+        pickableChampionSet = new Set(e.data || []);
+        Utils.Debug.log(`[AutoSelect] pickableChampionSet updated, size=${pickableChampionSet.size}`);
+    });
+    Utils.LCU.get('/lol-champ-select/v1/pickable-champion-ids')
+        .then(data => { pickableChampionSet = new Set(data || []); })
+        .catch(() => {});
+
     autoLockSessionUnsub = Utils.LCU.observe('/lol-champ-select/v1/session', e => {
         processChampSelectSession(e.data);
     });
@@ -875,6 +1028,16 @@ function unmountAutoLockChampion() {
         autoLockSessionUnsub();
         autoLockSessionUnsub = null;
     }
+    if (bannableChampUnsub) {
+        bannableChampUnsub();
+        bannableChampUnsub = null;
+    }
+    if (pickableChampUnsub) {
+        pickableChampUnsub();
+        pickableChampUnsub = null;
+    }
+    bannableChampionSet = null;
+    pickableChampionSet = null;
     lastAutoLockKeys.clear();
     actionActiveStartTimes.clear();
     lastBanDebugKey = '';

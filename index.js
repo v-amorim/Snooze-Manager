@@ -1121,6 +1121,7 @@ import * as modeSelectorTweaksModule from './modules/modeSelectorTweaks.js';
 import * as skinRandomizerModule from './modules/skinRandomizer.js';
 import * as profileWinLoseModule from './modules/profileWinLose.js';
 import * as bannerCustomizerModule from './modules/Banner-Customizer.js';
+import * as useClientDuringGameModule from './modules/useClientDuringGame.js';
 
 // Single manifest driving installEmberHook()/init()/load() below - adding a module
 // is now: write the import above, then add its namespace here. Call order only
@@ -1145,6 +1146,7 @@ const MODULES = [
   skinRandomizerModule,
   profileWinLoseModule,
   bannerCustomizerModule,
+  useClientDuringGameModule,
 ];
 
 const registeredModules = [];

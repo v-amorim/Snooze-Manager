@@ -6,6 +6,13 @@
  * @link https://github.com/ReformedDoge
  */
 import Utils from './generalUtils.js';
+
+// WS-cached session data (no HTTP GET needed)
+let _wsCsSession = null;
+let _wsCsSessionUnsub = null;
+let _wsGfSession = null;
+let _wsGfSessionUnsub = null;
+
 let augmentsCache = {};
 let augmentsLoaded = false;
 
@@ -334,8 +341,7 @@ const showGameAnalysis = async () => {
     Utils.Debug.log('[GameAnalysis] showGameAnalysis started');
 
     // Invalidate cached gameflow session to ensure a fresh fetch
-    _cachedGfSessionPromise = null;
-    _cachedGfSessionTime = 0;
+    _wsGfSession = null;
 
     document.querySelectorAll('.pm-analysis-modal-container').forEach(el => el.remove());
 
@@ -628,24 +634,12 @@ export function init(context) {
         }
     });
 
-let _cachedCsSessionPromise = null;
-let _cachedCsSessionTime = 0;
 function getCachedCsSession() {
-    const now = Date.now();
-    if (_cachedCsSessionPromise && now - _cachedCsSessionTime < 1500) return _cachedCsSessionPromise;
-    _cachedCsSessionTime = now;
-    _cachedCsSessionPromise = Utils.LCU.get('/lol-champ-select/v1/session').catch(() => null);
-    return _cachedCsSessionPromise;
+    return _wsCsSession ? Promise.resolve(_wsCsSession) : Utils.LCU.get('/lol-champ-select/v1/session').catch(() => null);
 }
 
-let _cachedGfSessionPromise = null;
-let _cachedGfSessionTime = 0;
 function getCachedGfSession() {
-    const now = Date.now();
-    if (_cachedGfSessionPromise && now - _cachedGfSessionTime < 2000) return _cachedGfSessionPromise;
-    _cachedGfSessionTime = now;
-    _cachedGfSessionPromise = Utils.LCU.get('/lol-gameflow/v1/session').catch(() => null);
-    return _cachedGfSessionPromise;
+    return _wsGfSession ? Promise.resolve(_wsGfSession) : Utils.LCU.get('/lol-gameflow/v1/session').catch(() => null);
 }
 
 function renderStatsElements(el, statsData, premadeColor) {
@@ -1145,9 +1139,18 @@ function renderStatsElements(el, statsData, premadeColor) {
 export function load() {
     Utils.GameData.Assets.init();
     loadAugments();
-    if (Utils.LCU && Utils.LCU.observe && !gameAnalysisPhaseUnsub) {
-        gameAnalysisPhaseUnsub = Utils.LCU.observe('/lol-gameflow/v1/gameflow-phase', e => handleGameAnalysisPhase(e.data));
-        Utils.LCU.get('/lol-gameflow/v1/gameflow-phase').then(phase => handleGameAnalysisPhase(phase)).catch(() => {});
+    if (Utils.LCU && Utils.LCU.observe) {
+        if (!gameAnalysisPhaseUnsub) {
+            gameAnalysisPhaseUnsub = Utils.LCU.observe('/lol-gameflow/v1/gameflow-phase', e => handleGameAnalysisPhase(e.data));
+            Utils.LCU.get('/lol-gameflow/v1/gameflow-phase').then(phase => handleGameAnalysisPhase(phase)).catch(() => {});
+        }
+        if (!_wsCsSessionUnsub) {
+            _wsCsSessionUnsub = Utils.LCU.observe('/lol-champ-select/v1/session', e => { _wsCsSession = e.data; });
+            Utils.LCU.get('/lol-champ-select/v1/session').then(data => { _wsCsSession = data; }).catch(() => {});
+        }
+        if (!_wsGfSessionUnsub) {
+            _wsGfSessionUnsub = Utils.LCU.observe('/lol-gameflow/v1/session', e => { _wsGfSession = e.data; });
+        }
     }
 }
 
