@@ -847,8 +847,8 @@ async function processChampSelectSession(s) {
                 actionChampionId: action.championId
             });
 
-            const resp = await Utils.LCU.patch(`/lol-champ-select/v1/session/actions/${action.id}`, payload);
-            Utils.Debug.log(`[AutoSelect] ${action.type} patch response for action=${action.id}: status=${resp?.status ?? 'N/A'} ok=${!!resp?.ok}`);
+            await Utils.LCU.patch(`/lol-champ-select/v1/session/actions/${action.id}`, payload);
+            Utils.Debug.log(`[AutoSelect] ${action.type} patch sent for action=${action.id}`);
             pluginPickSelectionId = champId;
         } catch (err) {
             Utils.Debug.warn(`[AutoSelect] ${action.type} patch failed`, {
