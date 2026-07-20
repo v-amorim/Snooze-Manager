@@ -63,7 +63,7 @@ async function reQueue() {
     _queuing = true;
     try {
         const queueId = Utils.Store.get('autoQueue', 'queueId');
-        const delay = Utils.Store.get('autoQueue', 'delay') || 0;
+        const delay = Utils.Store.get('autoQueue', 'delay') || 5;
         const enabled = Utils.Store.get('autoQueue', 'enabled');
 
         Utils.Debug.log('[AutoQueue]', `reQueue() — enabled=${enabled}, queueId=${queueId}, delay=${delay}s`);
