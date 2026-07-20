@@ -33,6 +33,11 @@ function migrateSettings() {
     }
 }
 
+function exitQueueOnDodge(source) {
+    Utils.Debug.log(`[AutoAccept] Dodge detected via ${source}. Exiting queue...`);
+    Utils.LCU.delete('/lol-lobby/v2/lobby/matchmaking/search').catch(() => {});
+}
+
 function getDelay() {
     const v = Utils.Store.get('autoAccept', DELAY_KEY);
     if (v === undefined || v === null) return 0;
@@ -92,6 +97,8 @@ export function init(context) {
     if (Utils.Store.get('autoAccept', DELAY_KEY) === undefined) {
         Utils.Store.set('autoAccept', DELAY_KEY, 0);
     }
+
+    installExitOnDodgeEmberHook();
 
     if (window.SnoozeManager && window.SnoozeManager.registerModule) {
         window.SnoozeManager.registerModule({
@@ -183,11 +190,27 @@ export function load() {
             const notifications = Array.isArray(e.data) ? e.data : [e.data];
             for (const n of notifications) {
                 if (n.notificationReason === 'StrangerDodged') {
-                    Utils.Debug.log('[AutoAccept] Champ select dodged by Stranger. Exiting queue...');
-                    Utils.LCU.delete('/lol-lobby/v2/lobby/matchmaking/search').catch(() => {});
+                    exitQueueOnDodge('WS:/lol-lobby/v2/notifications');
                     break;
                 }
             }
         });
+
     }
+}
+
+function installExitOnDodgeEmberHook() {
+    if (!Utils.Hooks?.Ember?.registerRule) return;
+    Utils.Hooks.Ember.registerRule({
+        name: 'autoAccept-exitOnDodge',
+        matcher: 'parties-notifications',
+        hookMethods: [{
+            name: '_strangerDodged',
+            callback(Ember, original, ...args) {
+                original(...args);
+                if (!Utils.Store.get('autoAccept', EXIT_ON_DODGE_KEY)) return;
+                exitQueueOnDodge('EmberHook:parties-notifications._strangerDodged');
+            }
+        }]
+    });
 }
